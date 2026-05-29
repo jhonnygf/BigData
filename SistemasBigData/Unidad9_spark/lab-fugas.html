@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab: Detección de Fugas | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+    <style>
+        .phase-badge {
+            display: inline-flex; align-items: center; gap: .5rem;
+            background: linear-gradient(135deg, #1a2a4a, #0d1f3c);
+            border: 1px solid var(--accent);
+            border-radius: 2rem; padding: .35rem 1rem;
+            font-size: .75rem; font-weight: 700; letter-spacing: .05em;
+            color: var(--accent); text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+        .arch-table td:first-child { font-weight: 600; color: var(--accent); }
+        .step-number {
+            display: inline-flex; width: 2rem; height: 2rem;
+            background: var(--accent); color: #000; border-radius: 50%;
+            align-items: center; justify-content: center;
+            font-weight: 800; font-size: .9rem; margin-right: .5rem;
+            flex-shrink: 0;
+        }
+        .step-title { display: flex; align-items: center; margin: 2rem 0 1rem; }
+        .step-title h3 { margin: 0; }
+        .terminal-block pre {
+            background: #000d1a; border: 1px solid #1a3a5c;
+            border-radius: .5rem; padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace; font-size: .85rem;
+            line-height: 1.6; color: #7ee8a2; overflow-x: auto;
+        }
+        .sensor-schema { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+        .schema-field { background: #0d1f3c; border: 1px solid #1a3a5c; border-radius: .5rem; padding: 1rem; text-align: center; }
+        .schema-field code { display: block; font-size: 1rem; color: var(--accent); margin-bottom: .25rem; }
+        .schema-field span { font-size: .75rem; color: var(--text2); }
+    </style>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🚰</span>
+    <h1>Lab — <span class="gradient-text">Detección de Fugas de Agua</span></h1>
+    <p>Pipeline completo: sensores IoT → Kafka → Spark Structured Streaming → modelo KMeans de detección de anomalías → alertas en tiempo real. Dataset sintético de 10 minutos, 1 lectura/segundo por sensor.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     ARQUITECTURA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>Arquitectura del sistema</h2>
+
+<div class="table-wrapper">
+    <table class="arch-table">
+        <thead><tr><th>Capa</th><th>Componente</th><th>Rol</th><th>Tecnología</th></tr></thead>
+        <tbody>
+            <tr><td>Ingestión</td><td>Productor Python</td><td>Simula 5 sensores de agua enviando JSON</td><td>kafka-python</td></tr>
+            <tr><td>Mensajería</td><td>Kafka topic <code>sensores-agua</code></td><td>Buffer duradero de eventos en tiempo real</td><td>Confluent Kafka 7.5</td></tr>
+            <tr><td>Procesamiento</td><td>Spark Streaming Job</td><td>Lee de Kafka, aplica modelo, emite alertas</td><td>PySpark 3.5 Structured Streaming</td></tr>
+            <tr><td>Modelo ML</td><td>KMeans (anomaly detection)</td><td>Pre-entrenado en datos normales; lecturas lejos del centroide = fuga</td><td>MLlib Pipeline</td></tr>
+            <tr><td>Salida</td><td>Kafka topic <code>alertas-fugas</code> + consola</td><td>Alertas JSON enriquecidas con sensor_id y causa</td><td>Kafka + console sink</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        <strong>¿Por qué KMeans para anomalías?</strong> Scikit-learn's IsolationForest no existe en MLlib nativo. KMeans en modo <em>anomaly scoring</em> es una alternativa directa en PySpark: entrenamos con datos normales y cualquier lectura cuya distancia al centroide más cercano supere un umbral se marca como anomalía.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     SCHEMA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>Schema del sensor</h2>
+<p>Cada sensor envía un JSON con este formato a Kafka cada segundo:</p>
+
+<div class="sensor-schema">
+    <div class="schema-field"><code>sensor_id</code><span>STRING — "sensor-01" … "sensor-05"</span></div>
+    <div class="schema-field"><code>ts_epoch_ms</code><span>LONG — epoch en milisegundos</span></div>
+    <div class="schema-field"><code>caudal_lpm</code><span>DOUBLE — litros/minuto (normal: 10-30)</span></div>
+    <div class="schema-field"><code>presion_bar</code><span>DOUBLE — bar (normal: 1.5-3.5)</span></div>
+    <div class="schema-field"><code>temp_c</code><span>DOUBLE — °C (normal: 8-22)</span></div>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">json — ejemplo lectura normal</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>{"sensor_id": "sensor-02", "ts_epoch_ms": 1745395200000,
+ "caudal_lpm": 18.4, "presion_bar": 2.7, "temp_c": 14.1}</code></pre>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">json — ejemplo lectura con FUGA (caudal anormal)</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>{"sensor_id": "sensor-02", "ts_epoch_ms": 1745395260000,
+ "caudal_lpm": 78.9, "presion_bar": 0.4, "temp_c": 14.3}</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     PREREQS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>Prerrequisitos</h2>
+
+<div class="step-title">
+    <span class="step-number">1</span>
+    <h3>Levanta el stack con Docker Compose</h3>
+</div>
+
+<p>Desde el directorio donde está el <code>docker-compose.yml</code>:</p>
+<div class="terminal-block">
+    <pre># Crear directorios que se montan como volúmenes
+mkdir -p lab_jobs lab_data lab_models lab_checkpoint
+
+# Arrancar Kafka + Spark (en background)
+docker compose up -d
+
+# Verificar que todo está sano
+docker compose ps</pre>
+</div>
+
+<p>Espera hasta que veas <code>lab-kafka-init</code> en estado <code>Exited (0)</code> — eso confirma que los topics <code>sensores-agua</code> y <code>alertas-fugas</code> se han creado.</p>
+
+<div class="step-title">
+    <span class="step-number">2</span>
+    <h3>Instala dependencias Python en tu host</h3>
+</div>
+<div class="terminal-block">
+    <pre>pip install kafka-python pyspark==3.5.0 numpy</pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     FASE 1: DATOS SINTÉTICOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2><span class="phase-badge">Fase 1</span> Generar datos de entrenamiento</h2>
+<p>Crea el fichero <code>lab_jobs/01_generar_datos.py</code> con el siguiente contenido:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — lab_jobs/01_generar_datos.py</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>"""
+Genera un CSV de lecturas NORMALES para entrenar el modelo KMeans.
+10 minutos × 5 sensores × 1 lectura/s = 3 000 filas
+"""
+import numpy as np
+import pandas as pd
+import time
+
+SENSORES    = [f"sensor-{i:02d}" for i in range(1, 6)]
+DURACION_S  = 600   # 10 minutos de datos sintéticos
+SALIDA      = "lab_data/entrenamiento_normal.csv"
+
+rng = np.random.default_rng(seed=42)
+filas = []
+
+ts_base = int(time.time() * 1000) - DURACION_S * 1000
+
+for t in range(DURACION_S):
+    ts = ts_base + t * 1000
+    for sid in SENSORES:
+        filas.append({
+            "sensor_id":   sid,
+            "ts_epoch_ms": ts,
+            "caudal_lpm":  rng.normal(loc=20, scale=3),     # normal: ~20 lpm
+            "presion_bar": rng.normal(loc=2.5, scale=0.3),  # normal: ~2.5 bar
+            "temp_c":      rng.normal(loc=15,  scale=2),    # normal: ~15 °C
+        })
+
+df = pd.DataFrame(filas)
+df["caudal_lpm"]  = df["caudal_lpm"].clip(5, 40)
+df["presion_bar"] = df["presion_bar"].clip(1.0, 4.0)
+df["temp_c"]      = df["temp_c"].clip(5, 30)
+
+df.to_csv(SALIDA, index=False)
+print(f"Guardadas {len(df)} filas en {SALIDA}")
+print(df.describe().round(2))
+</code></pre>
+</div>
+
+<div class="terminal-block">
+    <pre>python lab_jobs/01_generar_datos.py</pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     FASE 2: ENTRENAMIENTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2><span class="phase-badge">Fase 2</span> Entrenar el modelo de anomalías (KMeans)</h2>
+<p>Crea <code>lab_jobs/02_entrenar_modelo.py</code>:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — lab_jobs/02_entrenar_modelo.py</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>"""
+Entrena un KMeans con datos normales.
+Estrategia de anomalía: si la distancia de una lectura al centroide más cercano
+supera UMBRAL_DISTANCIA, se considera anómala (posible fuga).
+"""
+from pyspark.sql import SparkSession
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler, StandardScaler
+from pyspark.ml.clustering import KMeans
+from pyspark.sql.functions import col
+import json
+
+DATOS    = "lab_data/entrenamiento_normal.csv"
+MODELO   = "lab_models/kmeans_fugas"
+K        = 5   # un cluster por "estado operativo" esperado
+
+spark = SparkSession.builder \
+    .appName("EntrenarKMeans") \
+    .master("local[*]") \
+    .getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
+
+df = spark.read.csv(DATOS, header=True, inferSchema=True)
+df.show(5)
+
+# ── Pipeline: VectorAssembler → StandardScaler → KMeans ──────────
+FEATURES = ["caudal_lpm", "presion_bar", "temp_c"]
+
+assembler = VectorAssembler(inputCols=FEATURES, outputCol="features_raw")
+scaler    = StandardScaler(inputCol="features_raw", outputCol="features",
+                           withMean=True, withStd=True)
+kmeans    = KMeans(featuresCol="features", k=K, seed=42, maxIter=50)
+
+pipeline = Pipeline(stages=[assembler, scaler, kmeans])
+model    = pipeline.fit(df)
+
+model.save(MODELO)
+print(f"Modelo guardado en {MODELO}")
+
+# ── Calcular umbral de anomalía ──────────────────────────────────
+# Percentil 99 de las distancias en datos normales = umbral
+from pyspark.ml.linalg import Vectors
+import numpy as np
+
+transformed = model.transform(df)
+km_model    = model.stages[-1]
+centers     = km_model.clusterCenters()
+
+def distancia_centroide(row):
+    vec        = row.features.toArray()
+    cluster    = row.prediction
+    centroide  = np.array(centers[cluster])
+    return float(np.linalg.norm(vec - centroide))
+
+from pyspark.sql.types import DoubleType
+from pyspark.sql.functions import udf
+
+dist_udf = udf(distancia_centroide, DoubleType())
+dists = transformed.withColumn("dist", dist_udf(transformed["features", "prediction"]))
+
+# Percentil 99 como umbral
+p99 = dists.approxQuantile("dist", [0.99], 0.01)[0]
+print(f"\nUmbral de anomalía (p99): {p99:.4f}")
+
+umbral = {"umbral_distancia": p99, "features": FEATURES}
+with open("lab_models/umbral.json", "w") as f:
+    json.dump(umbral, f, indent=2)
+print("Umbral guardado en lab_models/umbral.json")
+
+spark.stop()
+</code></pre>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">El script anterior usa <code>local[*]</code> para correr en tu máquina directamente. No necesitas enviar el job a Spark Master para esta fase de entrenamiento.</div>
+</div>
+
+<div class="terminal-block">
+    <pre>python lab_jobs/02_entrenar_modelo.py</pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     FASE 3: STREAMING JOB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2><span class="phase-badge">Fase 3</span> Job de detección en tiempo real</h2>
+<p>Este es el job principal. Lee de Kafka, aplica el modelo, y emite alertas. Créalo como <code>lab_jobs/03_streaming_alertas.py</code>:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — lab_jobs/03_streaming_alertas.py</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>"""
+Job de Structured Streaming:
+  Kafka topic 'sensores-agua'
+      → deserializar JSON
+      → VectorAssembler + StandardScaler (del modelo guardado)
+      → KMeans.transform → calcular distancia al centroide
+      → Si dist > umbral  → FUGA_POSIBLE
+      → Escribir a Kafka topic 'alertas-fugas' Y consola
+"""
+import json
+import numpy as np
+
+from pyspark.sql import SparkSession
+from pyspark.ml import PipelineModel
+from pyspark.sql.functions import (
+    from_json, col, to_json, struct, lit,
+    when, to_timestamp, udf
+)
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, LongType, DoubleType
+)
+
+# ── Configuración ─────────────────────────────────────────────────
+KAFKA_BOOTSTRAP = "localhost:9092"   # desde el host
+TOPIC_IN        = "sensores-agua"
+TOPIC_OUT       = "alertas-fugas"
+MODELO_PATH     = "lab_models/kmeans_fugas"
+UMBRAL_PATH     = "lab_models/umbral.json"
+CHECKPOINT      = "/tmp/checkpoint/alertas_streaming"
+
+# ── Cargar umbral de anomalía ─────────────────────────────────────
+with open(UMBRAL_PATH) as f:
+    cfg = json.load(f)
+UMBRAL    = cfg["umbral_distancia"]
+FEATURES  = cfg["features"]
+print(f"Umbral cargado: {UMBRAL:.4f}")
+
+# ── Spark Session ─────────────────────────────────────────────────
+spark = SparkSession.builder \
+    .appName("DeteccionFugas_Streaming") \
+    .master("local[*]") \
+    .config("spark.jars.packages",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
+    .getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
+
+# ── Cargar modelo MLlib ────────────────────────────────────────────
+pipeline_model = PipelineModel.load(MODELO_PATH)
+km_model       = pipeline_model.stages[-1]
+centers_bc     = spark.sparkContext.broadcast(
+    [c.toArray().tolist() for c in km_model.clusterCenters()]
+)
+
+# ── Schema del mensaje Kafka ───────────────────────────────────────
+sensor_schema = StructType([
+    StructField("sensor_id",   StringType()),
+    StructField("ts_epoch_ms", LongType()),
+    StructField("caudal_lpm",  DoubleType()),
+    StructField("presion_bar", DoubleType()),
+    StructField("temp_c",      DoubleType()),
+])
+
+# ── UDF: distancia al centroide asignado ──────────────────────────
+def dist_centroide(features_vec, cluster_idx):
+    centers = centers_bc.value
+    arr     = features_vec.toArray()
+    centro  = np.array(centers[cluster_idx])
+    return float(np.linalg.norm(arr - centro))
+
+dist_udf = udf(dist_centroide, DoubleType())
+
+# ── Lectura de Kafka (stream) ─────────────────────────────────────
+raw_stream = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP) \
+    .option("subscribe", TOPIC_IN) \
+    .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
+    .load()
+
+parsed = raw_stream \
+    .selectExpr("CAST(value AS STRING) AS json_str",
+                "timestamp AS kafka_ts") \
+    .select(
+        from_json(col("json_str"), sensor_schema).alias("d"),
+        col("kafka_ts")
+    ) \
+    .select("d.*", "kafka_ts") \
+    .withColumn("event_time", to_timestamp(col("ts_epoch_ms") / 1000))
+
+# ── Aplicar pipeline MLlib ────────────────────────────────────────
+# (VectorAssembler + StandardScaler ya están en el pipeline guardado)
+# Sólo necesitamos aplicar las primeras 2 etapas (no el KMeans)
+scaler_model    = pipeline_model.stages[1]   # StandardScalerModel
+assembler_stage = pipeline_model.stages[0]   # VectorAssembler
+
+assembled  = assembler_stage.transform(parsed)
+scaled     = scaler_model.transform(assembled)
+predicted  = km_model.transform(scaled)
+
+with_dist = predicted.withColumn(
+    "distancia",
+    dist_udf(col("features"), col("prediction"))
+)
+
+# ── Clasificar: normal vs anomalía ────────────────────────────────
+UMBRAL_LIT = float(UMBRAL)
+
+with_alerta = with_dist.withColumn(
+    "alerta",
+    when(col("distancia") > UMBRAL_LIT, lit("FUGA_POSIBLE"))
+    .otherwise(lit("OK"))
+)
+
+alertas_only = with_alerta.filter(col("alerta") == "FUGA_POSIBLE")
+
+# ── Sink 1: consola (para ver en tiempo real en terminal) ─────────
+q_consola = with_alerta \
+    .select("sensor_id", "event_time", "caudal_lpm",
+            "presion_bar", "temp_c", "distancia", "alerta") \
+    .writeStream \
+    .outputMode("append") \
+    .format("console") \
+    .option("truncate", False) \
+    .trigger(processingTime="5 seconds") \
+    .start()
+
+# ── Sink 2: Kafka topic alertas-fugas ─────────────────────────────
+q_kafka = alertas_only \
+    .select(
+        col("sensor_id").alias("key"),
+        to_json(struct(
+            "sensor_id", "event_time",
+            "caudal_lpm", "presion_bar", "temp_c",
+            "distancia", "alerta"
+        )).alias("value")
+    ) \
+    .writeStream \
+    .outputMode("append") \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP) \
+    .option("topic", TOPIC_OUT) \
+    .option("checkpointLocation", CHECKPOINT + "/kafka") \
+    .trigger(processingTime="5 seconds") \
+    .start()
+
+print("━" * 60)
+print("  Streaming activo. Esperando datos en 'sensores-agua'...")
+print("  Spark UI → http://localhost:4040")
+print("  Para parar: Ctrl+C")
+print("━" * 60)
+
+spark.streams.awaitAnyTermination()
+</code></pre>
+</div>
+
+<div class="terminal-block">
+    <pre># Lanzar el job de streaming
+python lab_jobs/03_streaming_alertas.py</pre>
+</div>
+
+<div class="info-box warning">
+    <div class="info-box-icon">⚠️</div>
+    <div class="info-box-text">
+        Deja este proceso corriendo en una terminal. Abre una segunda terminal para el paso siguiente (envío de datos del sensor).
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     FASE 4: PRODUCTOR (TÚ ENVÍAS DATOS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2><span class="phase-badge">Fase 4</span> Enviar datos al sistema (tu rol)</h2>
+
+<div class="info-box danger">
+    <div class="info-box-icon">🎯</div>
+    <div class="info-box-text">
+        <strong>Aquí es donde tú participas.</strong> Ejecuta el productor Python de abajo. Envía lecturas reales (o las anomalías que quieras inyectar) al topic Kafka <code>sensores-agua</code> en <code>localhost:9092</code>. El sistema de detección las procesará en los próximos 5 segundos.
+    </div>
+</div>
+
+<p>Crea <code>lab_jobs/04_productor_sensores.py</code>:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — lab_jobs/04_productor_sensores.py</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">"""
+Simulador de sensores de agua.
+Envía una lectura por sensor por segundo durante DURACION_S segundos.
+
+Parámetros opcionales (modifica las variables de abajo):
+  DURACION_S     — duración total en segundos (default: 600 = 10 min)
+  FUGAS_EN_S     — lista de instantes en segundos donde se inyectan fugas
+                   (ej: [120, 300, 480] → fugas al min 2, 5 y 8)
+  SENSORES_FUGA  — qué sensores se ven afectados en esas fugas
+"""
+import json
+import time
+import numpy as np
+from kafka import KafkaProducer
+
+# ── Configuración ─────────────────────────────────────────────────
+KAFKA_BOOTSTRAP = "localhost:9092"
+TOPIC           = "sensores-agua"
+DURACION_S      = 600                  # 10 minutos
+SENSORES        = [f"sensor-{i:02d}" for i in range(1, 6)]
+
+# Instantes (segundos desde el inicio) donde hay una fuga
+FUGAS_EN_S      = [120, 240, 360, 480]
+SENSORES_FUGA   = {"sensor-02", "sensor-04"}   # qué sensores fallan
+
+# ── Productor Kafka ────────────────────────────────────────────────
+producer = KafkaProducer(
+    bootstrap_servers=KAFKA_BOOTSTRAP,
+    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+    key_serializer=lambda k: k.encode("utf-8"),
+    acks="all",
+)
+
+rng = np.random.default_rng()
+
+print(f"Enviando datos a topic '{TOPIC}' durante {DURACION_S}s...")
+print(f"Fugas programadas en segundos: {FUGAS_EN_S}")
+print("Ctrl+C para parar antes de tiempo\n")
+
+for t in range(DURACION_S):
+    fuga_activa = t in FUGAS_EN_S
+
+    for sid in SENSORES:
+        is_broken = fuga_activa and sid in SENSORES_FUGA
+
+        if is_broken:
+            # Simular fuga: caudal disparado, presión caída
+            caudal  = rng.uniform(60, 100)
+            presion = rng.uniform(0.1, 0.6)
+            temp    = rng.normal(15, 2)
+        else:
+            # Condiciones normales
+            caudal  = rng.normal(20, 3)
+            presion = rng.normal(2.5, 0.3)
+            temp    = rng.normal(15, 2)
+
+        msg = {
+            "sensor_id":   sid,
+            "ts_epoch_ms": int(time.time() * 1000),
+            "caudal_lpm":  round(float(caudal),  2),
+            "presion_bar": round(float(presion), 3),
+            "temp_c":      round(float(temp),    2),
+        }
+
+        producer.send(TOPIC, key=sid, value=msg)
+
+        if is_broken:
+            print(f"  💧 FUGA inyectada → {sid}: caudal={caudal:.1f} lpm, "
+                  f"presion={presion:.2f} bar")
+
+    producer.flush()
+
+    # Indicador de progreso cada 30 segundos
+    if t % 30 == 0:
+        mins = t // 60; segs = t % 60
+        print(f"  t={mins:02d}:{segs:02d} — lecturas enviadas: {(t+1)*len(SENSORES)}")
+
+    time.sleep(1)   # 1 lectura/s por sensor
+
+producer.close()
+print("\nProductor finalizado.")
+</code></pre>
+</div>
+
+<div class="terminal-block">
+    <pre># En una SEGUNDA terminal (deja la primera con el streaming corriendo)
+python lab_jobs/04_productor_sensores.py</pre>
+</div>
+
+<p>Verás en la primera terminal (el job de streaming) cómo Spark detecta las fugas inyectadas en los segundos 120, 240, 360 y 480.</p>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     FASE 5: MONITORIZACIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2><span class="phase-badge">Fase 5</span> Monitorizar alertas</h2>
+
+<h3>5.1 Leer las alertas desde Kafka (consola)</h3>
+<div class="terminal-block">
+    <pre># Ver alertas en tiempo real desde el topic alertas-fugas
+docker exec lab-kafka \
+  kafka-console-consumer \
+  --bootstrap-server localhost:29092 \
+  --topic alertas-fugas \
+  --from-beginning</pre>
+</div>
+
+<h3>5.2 Spark UI</h3>
+<p>Mientras el job está corriendo, visita <a href="http://localhost:4040" target="_blank">http://localhost:4040</a> para ver el DAG de ejecución, los micro-batches procesados y las métricas de cada trigger.</p>
+
+<h3>5.3 Consultar resultados en batch (post-análisis)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — análisis post-lab</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, count, avg
+
+spark = SparkSession.builder.appName("PostAnalisis").master("local[*]").getOrCreate()
+
+# Si guardaste las alertas a Parquet añade este sink en el job de streaming:
+# .format("parquet").option("path", "lab_data/alertas/")
+# Luego puedes leerlas así:
+
+# alertas = spark.read.parquet("lab_data/alertas/")
+# alertas.groupBy("sensor_id", "alerta").count().show()
+
+# Resumen estadístico de todas las lecturas
+df = spark.read.csv("lab_data/entrenamiento_normal.csv", header=True, inferSchema=True)
+df.groupBy("sensor_id").agg(
+    count("*").alias("n"),
+    avg("caudal_lpm").alias("caudal_medio"),
+    avg("presion_bar").alias("presion_media")
+).orderBy("sensor_id").show()
+</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     PREGUNTAS PARA REFLEXIONAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>Preguntas para reflexionar</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>#</th><th>Pregunta</th><th>Pista</th></tr></thead>
+        <tbody>
+            <tr><td>1</td><td>¿Qué pasa si cambias el umbral al percentil 95 en vez del 99? ¿Más o menos falsos positivos?</td><td>Edita <code>umbral.json</code> en caliente (para, cambia, reinicia el job)</td></tr>
+            <tr><td>2</td><td>¿Cómo añadirías un watermark de 30 segundos para tolerar sensores con retardo de red?</td><td><code>.withWatermark("event_time", "30 seconds")</code> antes del transform</td></tr>
+            <tr><td>3</td><td>El modelo se entrena una vez y se mantiene estático. ¿Cómo actualizarías el modelo periódicamente sin parar el stream?</td><td>Patrón "model versioning": guarda modelos versionados y recarga con un scheduler. Busca "Spark ML model refresh streaming".</td></tr>
+            <tr><td>4</td><td>¿Por qué <code>outputMode("append")</code> funciona aquí sin watermark explícito en el job de alertas?</td><td>No hay agregaciones temporales — solo <code>filter + select</code></td></tr>
+            <tr><td>5</td><td>Añade una ventana de 1 minuto que calcule el caudal medio por sensor. ¿Qué output mode usarías?</td><td><code>window + groupBy + .outputMode("update")</code></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     LIMPIEZA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>Limpieza del entorno</h2>
+<div class="terminal-block">
+    <pre># Parar el productor y el job de streaming: Ctrl+C en cada terminal
+
+# Parar y eliminar los contenedores Docker
+docker compose down
+
+# Opcional: limpiar datos generados
+rm -rf lab_data/ lab_models/ lab_checkpoint/</pre>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m6-streaming.html" class="btn btn-outline">← M6: Structured Streaming</a>
+    <a href="index.html" class="btn btn-primary">Volver al índice ↑</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

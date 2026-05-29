@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3: RDDs & DataFrames | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🗂</span>
+    <h1>M3 — <span class="gradient-text">RDDs & DataFrames</span></h1>
+    <p>Los dos modelos de datos de Spark. RDD es el nivel bajo (control total), DataFrame es el nivel alto (optimización automática). Aprende cuándo, cómo y por qué usar cada uno.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. RDD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. RDD — Resilient Distributed Dataset</h2>
+
+<p>El RDD es la abstracción fundamental de Spark. Un RDD es una colección de objetos Python <strong>distribuida en particiones</strong> a través del cluster, <strong>inmutable</strong> y con <strong>linaje</strong> (sabe cómo reconstruirse si una partición falla).</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Característica</th><th>Detalle</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Resiliente</strong></td><td>Si se pierde una partición, Spark la recalcula desde su linaje (grafo de transformaciones, no replica datos)</td></tr>
+            <tr><td><strong>Distribuido</strong></td><td>Dividido en particiones repartidas entre executors del cluster</td></tr>
+            <tr><td><strong>Dataset</strong></td><td>Colección de cualquier tipo Python: tuplas, dicts, objetos, strings…</td></tr>
+            <tr><td><strong>Lazy</strong></td><td>Las transformaciones no se ejecutan hasta que se llama a una acción</td></tr>
+            <tr><td><strong>Sin schema</strong></td><td>El RDD no sabe qué hay dentro — es responsabilidad del programador</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h3>1.1 Crear RDDs</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.master("local[*]").appName("m3-rdd").getOrCreate()
+sc = spark.sparkContext  # SparkContext: acceso al nivel RDD
+
+# ── Desde colección Python (parallelizar)
+rdd1 = sc.parallelize([1, 2, 3, 4, 5, 6, 7, 8], numSlices=4)
+print(rdd1.getNumPartitions())  # 4
+
+# ── Desde fichero de texto (cada línea = un elemento)
+# rdd2 = sc.textFile("/path/al/fichero.txt")
+# rdd3 = sc.textFile("s3a://mi-bucket/datos/*.csv")
+
+# ── Desde fichero de pares clave-valor
+# rdd_pares = sc.sequenceFile("/path/sequence")
+
+# ── Desde otro RDD (transformación)
+rdd_cuadrados = rdd1.map(lambda x: x ** 2)  # todavía no ejecuta nada
+
+# Ver los datos (acción → fuerza ejecución)
+print(rdd_cuadrados.collect())  # [1, 4, 9, 16, 25, 36, 49, 64]</code></pre>
+</div>
+
+<h3>1.2 Transformaciones de RDD (lazy)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>datos = sc.parallelize(range(1, 11))
+
+# map: transformar cada elemento
+pares_rdd = datos.map(lambda x: (x, x % 2 == 0))  # (valor, es_par)
+
+# filter: seleccionar elementos
+solo_pares = datos.filter(lambda x: x % 2 == 0)
+
+# flatMap: cada elemento puede producir VARIOS (o cero) registros
+frases = sc.parallelize(["hola mundo", "spark es potente", "rdd"])
+palabras = frases.flatMap(lambda frase: frase.split(" "))
+print(palabras.collect())  # ['hola', 'mundo', 'spark', 'es', 'potente', 'rdd']
+
+# distinct: eliminar duplicados
+con_dupes = sc.parallelize([1, 2, 2, 3, 3, 3])
+sin_dupes = con_dupes.distinct()
+
+# union: combinar dos RDDs
+rdd_a = sc.parallelize([1, 2, 3])
+rdd_b = sc.parallelize([3, 4, 5])
+union_rdd = rdd_a.union(rdd_b)  # [1, 2, 3, 3, 4, 5]: NO elimina duplicados
+
+# mapPartitions: función se aplica a la partición entera (eficiente para init de conexiones)
+def procesar_particion(iterador):
+    # Aquí podrías inicializar conexión DB una vez por partición
+    return (x * 2 for x in iterador)
+
+dobles = datos.mapPartitions(procesar_particion)
+
+# sortBy: reordenar
+descendente = datos.sortBy(lambda x: -x)
+print(descendente.take(3))  # [10, 9, 8]</code></pre>
+</div>
+
+<h3>1.3 RDDs de pares clave-valor (PairRDD)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Un PairRDD es un RDD de tuplas (clave, valor)
+ventas = sc.parallelize([
+    ("Norte", 1200), ("Sur", 850), ("Norte", 600),
+    ("Este", 400),   ("Sur", 920), ("Norte", 780)
+])
+
+# reduceByKey: reduce por clave (más eficiente que groupByKey)
+total_por_zona = ventas.reduceByKey(lambda a, b: a + b)
+print(total_por_zona.collect())
+# [('Norte', 2580), ('Sur', 1770), ('Este', 400)]
+
+# groupByKey: agrupa valores por clave (usa más memoria)
+grupado = ventas.groupByKey()  # cada valor es un iterable
+grupado_list = grupado.mapValues(list)
+print(grupado_list.collect())
+# [('Norte', [1200, 600, 780]), ('Sur', [850, 920]), ('Este', [400])]
+
+# sortByKey: ordenar por clave
+ordenado = total_por_zona.sortByKey()
+print(ordenado.collect())  # [('Este', 400), ('Norte', 2580), ('Sur', 1770)]
+
+# join: unir dos PairRDDs por clave
+nombres = sc.parallelize([("Norte", "Zona Norte"), ("Sur", "Zona Sur")])
+join_result = total_por_zona.join(nombres)
+print(join_result.collect())
+# [('Norte', (2580, 'Zona Norte')), ('Sur', (1770, 'Zona Sur'))]
+
+# mapValues: transformar solo el valor
+promedio = ventas.groupByKey().mapValues(lambda vals: sum(vals) / len(list(vals)))</code></pre>
+</div>
+
+<h3>1.4 Acciones de RDD (fuerzan ejecución)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">rdd = sc.parallelize(range(1, 101))
+
+collect()           # traer TODO al driver — ⚠️ solo para datos pequeños
+take(n)             # traer los primeros n elementos
+first()             # primer elemento
+count()             # número de elementos
+countByValue()      # {valor: frecuencia}
+sum()               # suma (solo numérico)
+min()               # mínimo
+max()               # máximo
+mean()              # media
+reduce(f)           # reducir con función binaria
+fold(cero, f)       # reduce con valor cero inicial por partición
+aggregate(cero, seqOp, combOp)  # reducción con tipo de retorno diferente
+
+# saveAsTextFile: guardar resultado
+rdd.map(str).saveAsTextFile("/tmp/resultado_rdd")
+
+# foreach: ejecutar acción en cada elemento (sin retorno al driver)
+rdd.foreach(lambda x: print(x))  # ejecuta en executors
+
+# Ejemplo práctico
+print(rdd.count())       # 100
+print(rdd.sum())         # 5050
+print(rdd.take(5))       # [1, 2, 3, 4, 5]
+print(rdd.reduce(lambda a, b: a + b))  # 5050</code></pre>
+</div>
+
+<h3>1.5 Persistencia / Caché</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark import StorageLevel
+
+rdd_costoso = (
+    sc.textFile("/datos/grande.csv")
+      .flatMap(lambda l: l.split(","))
+      .map(str.strip)
+      .filter(bool)
+)
+
+# cache() = MEMORY_AND_DISK por defecto en DataFrames, MEMORY_ONLY en RDDs
+rdd_costoso.cache()
+
+# Niveles de almacenamiento
+rdd_costoso.persist(StorageLevel.MEMORY_ONLY)         # solo RAM (rápido, riesgo OOM)
+rdd_costoso.persist(StorageLevel.MEMORY_AND_DISK)     # RAM, si no cabe → disco
+rdd_costoso.persist(StorageLevel.DISK_ONLY)           # solo disco
+rdd_costoso.persist(StorageLevel.MEMORY_AND_DISK_2)   # replicado en 2 nodos
+
+# Primeras acciones después de persist = ejecuta + almacena en caché
+print(rdd_costoso.count())  # ejecuta + cachea
+print(rdd_costoso.take(5))  # usa caché — no re-ejecuta
+
+# Liberar caché cuando ya no se necesita
+rdd_costoso.unpersist()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. DATAFRAMES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. DataFrames: RDDs con esquema</h2>
+
+<p>Un DataFrame es un RDD de <code>Row</code> con un <strong>schema</strong> conocido (nombres y tipos de columnas). El optimizador <em>Catalyst</em> usa el schema para generar planes físicos eficientes. <strong>Usa DataFrames por encima de RDDs para casi todo</strong>.</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th></th><th>RDD</th><th>DataFrame</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Schema</strong></td><td>No (cualquier objeto Python)</td><td>Sí (StructType con tipos)</td></tr>
+            <tr><td><strong>Optimización</strong></td><td>Ninguna (caja negra para Spark)</td><td>Catalyst optimizer + Tungsten</td></tr>
+            <tr><td><strong>Rendimiento</strong></td><td>Línea base</td><td>Normalmente 5-10× más rápido</td></tr>
+            <tr><td><strong>API</strong></td><td>map/filter/reduce funcional</td><td>select/filter/groupBy/join declarativa</td></tr>
+            <tr><td><strong>SQL</strong></td><td>No</td><td>Sí (createOrReplaceTempView)</td></tr>
+            <tr><td><strong>Cuándo usar RDD</strong></td><td colspan="2">Datos no estructurados, algoritmos que necesitan control total de particiones, operaciones que el DataFrame no puede expresar</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h3>2.1 Crear DataFrames</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, IntegerType, DoubleType, BooleanType, TimestampType
+)
+
+spark = SparkSession.builder.master("local[*]").appName("m3-df").getOrCreate()
+
+# ── Desde lista de dicts (inferir schema)
+datos = [
+    {"nombre": "Alice", "salario": 42000, "dpto": "Ingeniería", "activo": True},
+    {"nombre": "Bob",   "salario": 35000, "dpto": "Marketing",  "activo": True},
+    {"nombre": "Clara", "salario": 48000, "dpto": "Ingeniería", "activo": False},
+    {"nombre": "David", "salario": 39000, "dpto": "RRHH",       "activo": True},
+]
+df = spark.createDataFrame(datos)
+df.printSchema()
+# root
+#  |-- activo: boolean
+#  |-- dpto: string
+#  |-- nombre: string
+#  |-- salario: long    ← infiere long, no int
+
+# ── Con schema explícito (recomendado en producción)
+schema = StructType([
+    StructField("nombre",  StringType(),  nullable=False),
+    StructField("salario", IntegerType(), nullable=False),
+    StructField("dpto",    StringType(),  nullable=True),
+    StructField("activo",  BooleanType(), nullable=True),
+])
+
+from pyspark.sql import Row
+filas = [Row(nombre="Alice", salario=42000, dpto="Ingeniería", activo=True),
+         Row(nombre="Bob",   salario=35000, dpto="Marketing",  activo=True)]
+df_schema = spark.createDataFrame(filas, schema=schema)
+
+# ── Desde CSV
+df_csv = (spark.read.format("csv")
+          .option("header", "true")
+          .option("inferSchema", "true")
+          .option("sep", ";")
+          .load("/datos/empleados.csv"))
+
+# ── Desde Parquet (recomendado para almacenamiento)
+# df_parquet = spark.read.parquet("/datos/empleados.parquet")
+
+# ── Desde JSON
+# df_json = spark.read.json("/datos/empleados.json")</code></pre>
+</div>
+
+<h3>2.2 Exploración básica</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">df.show()          # primeras 20 filas, trunca strings a 20 chars
+df.show(5, truncate=False)  # 5 filas sin truncar
+df.printSchema()   # árbol de tipos
+df.schema          # StructType object
+df.dtypes          # [('nombre', 'string'), ('salario', 'int'), ...]
+df.columns         # ['nombre', 'salario', 'dpto', 'activo']
+df.count()         # número de filas (acción)
+df.describe()      # estadísticas básicas de columnas numéricas
+df.summary()       # estadísticas ampliadas (min, 25%, 50%, 75%, max)
+df.head(3)         # 3 primeras filas como lista de Row
+df.first()         # primera fila como Row
+df.toPandas()      # convertir a pandas DF — ⚠️ trae TODO al driver</code></pre>
+</div>
+
+<h3>2.3 Transformaciones: select y withColumn</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import functions as F
+from pyspark.sql.functions import col, lit, when, round as spark_round
+
+# ── select: elegir/transformar columnas
+df.select("nombre", "salario").show()
+df.select(col("nombre"), col("salario") * 1.1).show()
+df.select("nombre", (col("salario") * 1.1).alias("salario_nuevo")).show()
+df.select(F.upper(col("dpto")).alias("dpto_norm")).show()
+
+# ── withColumn: añadir o reemplazar una columna
+df2 = df.withColumn("salario_neto", spark_round(col("salario") * 0.78, 2))
+df3 = df2.withColumn("nivel",
+    when(col("salario") >= 45000, "senior")
+   .when(col("salario") >= 38000, "mid")
+   .otherwise("junior"))
+
+# ── withColumnRenamed: renombrar
+df4 = df3.withColumnRenamed("nombre", "empleado_nombre")
+
+# ── drop: eliminar columnas
+df5 = df4.drop("activo", "nivel")
+
+# ── cast: cambiar tipo
+df6 = df.withColumn("salario", col("salario").cast(DoubleType()))
+
+# Encadenar transformaciones
+resultado = (df
+    .withColumn("salario_neto", spark_round(col("salario") * 0.78, 2))
+    .withColumn("es_senior", col("salario") >= 45000)
+    .withColumn("dpto_norm", F.upper(F.trim(col("dpto"))))
+    .select("nombre", "dpto_norm", "salario", "salario_neto", "es_senior")
+)
+resultado.show()</code></pre>
+</div>
+
+<h3>2.4 Transformaciones: filter, distinct, sort, limit</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># ── filter / where (sinónimos)
+ing = df.filter(col("dpto") == "Ingeniería")
+ing = df.where("dpto = 'Ingeniería'")  # también acepta SQL string
+
+# Múltiples condiciones: & (AND), | (OR), ~ (NOT)
+activos_senior = df.filter((col("activo") == True) & (col("salario") >= 45000))
+
+# IN, LIKE, isNull, isNotNull, between
+df.filter(col("dpto").isin("Ingeniería", "Marketing"))
+df.filter(col("nombre").like("A%"))
+df.filter(col("salario").between(35000, 50000))
+df.filter(col("dpto").isNotNull())
+
+# ── sort / orderBy (sinónimos)
+df.sort("salario").show()               # ascendente
+df.sort(col("salario").desc()).show()   # descendente
+df.orderBy(["dpto", col("salario").desc()])  # multi-columna
+
+# ── distinct + dropDuplicates
+df.distinct()  # filas únicas (todas las columnas)
+df.dropDuplicates(["dpto"])  # primer registro por dpto (no determinista)
+df.dropDuplicates(["dpto", "nombre"])
+
+# ── limit
+df.limit(10).show()  # solo 10 filas en el resultado final</code></pre>
+</div>
+
+<h3>2.5 Aggregaciones: groupBy y agg</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.functions import (
+    count, sum, avg, min, max,
+    collect_list, collect_set,
+    first, last, stddev, variance,
+    countDistinct
+)
+
+# Operaciones globales (sin groupBy)
+df.agg(avg("salario").alias("media_global"),
+       max("salario").alias("max_global")).show()
+
+# groupBy + agg
+resumen = (df.groupBy("dpto")
+    .agg(
+        count("*").alias("n_empleados"),
+        avg("salario").alias("salario_medio"),
+        max("salario").alias("salario_max"),
+        min("salario").alias("salario_min"),
+        stddev("salario").alias("desv_std"),
+        collect_list("nombre").alias("nombres"),
+        countDistinct("activo").alias("estados_distintos")
+    )
+    .orderBy(col("salario_medio").desc())
+)
+resumen.show(truncate=False)
+
+# Pivot: convertir filas en columnas
+pivot = (df.groupBy("nombre")
+    .pivot("dpto")  # crea una columna por cada dpto
+    .agg(avg("salario"))
+)
+pivot.show()</code></pre>
+</div>
+
+<h3>2.6 Joins</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">dptos = spark.createDataFrame([
+    {"dpto": "Ingeniería", "edificio": "A", "presupuesto": 500000},
+    {"dpto": "Marketing",  "edificio": "B", "presupuesto": 250000},
+    {"dpto": "RRHH",       "edificio": "A", "presupuesto": 120000},
+])
+
+# inner join (defecto)
+df.join(dptos, on="dpto", how="inner").show()
+
+# Tipos de join
+# inner, left, right, full (outer), semi, anti, cross
+
+# left join: todos los empleados, aunque no haya dpto
+df.join(dptos, on="dpto", how="left").show()
+
+# anti join: empleados SIN departamento coincidente
+df.join(dptos, on="dpto", how="anti").show()
+
+# join con condición más compleja
+df.join(dptos,
+    (df.dpto == dptos.dpto) & (df.salario < dptos.presupuesto * 0.01),
+    how="inner").show()
+
+# ⚠️ COLUMNAS DUPLICADAS: si ambos DF tienen columas con el mismo nombre
+# usar alias en los DataFrames
+df.alias("emp").join(
+    dptos.alias("dep"),
+    col("emp.dpto") == col("dep.dpto")
+).select("emp.nombre", "dep.edificio").show()
+
+# Broadcast join: cuando uno es pequeño (<10MB) → evita shuffle
+from pyspark.sql.functions import broadcast
+df.join(broadcast(dptos), on="dpto").show()  # Hint para Catalyst</code></pre>
+</div>
+
+<h3>2.7 Window Functions</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.window import Window
+from pyspark.sql.functions import rank, dense_rank, row_number, lag, lead, avg as window_avg
+
+# Definir ventana: partición + orden
+ventana_por_dpto = Window.partitionBy("dpto").orderBy(col("salario").desc())
+
+# rank: puestos dentro de cada departamento (con saltos si empate)
+df_rank = df.withColumn("rank_dpto", rank().over(ventana_por_dpto))
+
+# dense_rank: sin saltos
+df_rank = df.withColumn("dense_rank_dpto", dense_rank().over(ventana_por_dpto))
+
+# Ventana con frame para media móvil (sin partición)
+ventana_global = Window.orderBy("salario").rowsBetween(-1, 1)
+df_ma = df.withColumn("media_movil_3", window_avg("salario").over(ventana_global))
+
+# lag/lead: acceder a la fila anterior/siguiente
+ventana_tiempo = Window.partitionBy("sensor_id").orderBy("timestamp")
+df_ts = df_sensores.withColumn("valor_anterior", lag("valor", 1).over(ventana_tiempo))
+df_ts = df_ts.withColumn("delta", col("valor") - col("valor_anterior"))
+
+df_rank.show()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. TRANSFORMACIONES VS ACCIONES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. Transformaciones vs Acciones: lazy evaluation</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Transformaciones (lazy)</th><th>Acciones (desencadenan ejecución)</th></tr></thead>
+        <tbody>
+            <tr><td><code>select, filter, where</code></td><td><code>show, collect, count</code></td></tr>
+            <tr><td><code>withColumn, drop</code></td><td><code>first, head, take</code></td></tr>
+            <tr><td><code>join, union</code></td><td><code>write.save, write.parquet...</code></td></tr>
+            <tr><td><code>groupBy, agg</code></td><td><code>toPandas</code></td></tr>
+            <tr><td><code>sort, orderBy, limit</code></td><td><code>foreach, foreachPartition</code></td></tr>
+            <tr><td><code>withColumnRenamed, cast</code></td><td><code>reduce (RDD)</code></td></tr>
+            <tr><td><code>cache, persist</code> (registra, no ejecuta)</td><td><code>describe, summary</code></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        <strong>Ejecutar <code>df.explain()</code></strong> antes de cualquier acción para ver el plan lógico y físico que Catalyst generará. <code>df.explain(extended=True)</code> muestra los 4 planes: unresolved → analyzed → optimized → physical.
+    </div>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m2-funcional.html" class="btn btn-outline">← M2: Funcional</a>
+    <a href="m4-spark-sql.html" class="btn btn-primary">M4: Spark SQL →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

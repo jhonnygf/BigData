@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M6: Structured Streaming | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🌊</span>
+    <h1>M6 — <span class="gradient-text">Structured Streaming</span></h1>
+    <p>Procesamiento de datos en tiempo real. Structured Streaming trata un stream como una tabla que crece infinitamente — las mismas transformaciones DataFrame/SQL, ejecutadas continuamente.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. MODELO MENTAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. El modelo mental: tabla que crece</h2>
+
+<p>La gran idea de Structured Streaming es que <strong>no inventaron una nueva API</strong>. Un stream es un DataFrame cuyas filas llegan continuamente y Spark ejecuta repetidamente tu lógica sobre los nuevos datos.</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Concepto</th><th>Batch</th><th>Streaming</th></tr></thead>
+        <tbody>
+            <tr><td>Fuente de datos</td><td>Fichero CSV, tabla DB completa</td><td>Socket, Kafka, directorio que crece</td></tr>
+            <tr><td>Cuándo se ejecuta</td><td>Una vez, al lanzar el job</td><td>Continuamente — cada micro-batch</td></tr>
+            <tr><td>API</td><td><code>spark.read</code></td><td><code>spark.readStream</code></td></tr>
+            <tr><td>Escritura</td><td><code>df.write</code></td><td><code>df.writeStream</code></td></tr>
+            <tr><td>Transformaciones</td><td>Idénticas</td><td>Idénticas (con algunas restricciones)</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        Internamente, Structured Streaming divide el tiempo en <strong>micro-batches</strong>. En cada trigger, lee los nuevos datos, ejecuta el plan Catalyst como un job batch normal, y hace commit del resultado. El estado persistente entre micro-batches se guarda en un <em>checkpoint</em>.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. SOURCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. Sources — Cómo llegan los datos</h2>
+
+<h3>2.1 Socket TCP (para demos)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+
+spark = SparkSession.builder \
+    .appName("DemoSocket") \
+    .getOrCreate()
+
+# Lee líneas de texto desde un socket TCP
+# nc -lk 9999  ← en otra terminal para simular datos
+lines = spark.readStream \
+    .format("socket") \
+    .option("host", "localhost") \
+    .option("port", 9999) \
+    .load()
+
+# lines es un DataFrame con una columna: "value" (string)
+words = lines.selectExpr("explode(split(value, ' ')) AS word")
+counts = words.groupBy("word").count()
+
+query = counts.writeStream \
+    .outputMode("complete") \
+    .format("console") \
+    .start()
+
+query.awaitTermination()  # bloquea hasta que se detenga</code></pre>
+</div>
+
+<div class="info-box warning">
+    <div class="info-box-icon">⚠️</div>
+    <div class="info-box-text">
+        <strong>Socket solo para demos.</strong> No tiene tolerancia a fallos — si el job se cae, los datos recibidos se pierden. Para producción usa Kafka o ficheros.
+    </div>
+</div>
+
+<h3>2.2 Directorio de ficheros (auto-ingest)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+
+schema = StructType([
+    StructField("timestamp",  TimestampType()),
+    StructField("sensor_id",  StringType()),
+    StructField("caudal_lpm", DoubleType()),
+    StructField("presion_bar", DoubleType()),
+])
+
+# Spark detecta automáticamente ficheros nuevos que llegan a /datos/entrada/
+df = spark.readStream \
+    .schema(schema) \
+    .option("maxFilesPerTrigger", 10) \  # cuántos ficheros por micro-batch
+    .json("/datos/entrada/")
+
+df.writeStream \
+    .format("parquet") \
+    .option("path", "/datos/salida/") \
+    .option("checkpointLocation", "/checkpoint/ingest/") \
+    .start()</code></pre>
+</div>
+
+<h3>2.3 Kafka (producción)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>import json
+from pyspark.sql.functions import from_json, col
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
+
+# Schema del JSON que llega en Kafka
+sensor_schema = StructType([
+    StructField("sensor_id",   StringType()),
+    StructField("timestamp",   LongType()),    # epoch ms
+    StructField("caudal_lpm",  DoubleType()),
+    StructField("presion_bar", DoubleType()),
+    StructField("temp_c",      DoubleType()),
+])
+
+raw = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "kafka:9092") \
+    .option("subscribe", "sensores-agua") \
+    .option("startingOffsets", "latest") \
+    .load()
+
+# raw tiene columnas: key, value(bytes), topic, partition, offset, timestamp
+# Deserializamos el JSON del campo value
+parsed = raw \
+    .selectExpr("CAST(value AS STRING) AS json_str") \
+    .select(from_json(col("json_str"), sensor_schema).alias("data")) \
+    .select("data.*")
+
+parsed.printSchema()
+# root
+#  |-- sensor_id:   string (nullable = true)
+#  |-- timestamp:   long   (nullable = true)
+#  |-- caudal_lpm:  double (nullable = true)
+#  |-- presion_bar: double (nullable = true)
+#  |-- temp_c:      double (nullable = true)</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. OUTPUT MODES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. Output Modes — ¿Qué escribir en cada trigger?</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Modo</th><th>¿Qué escribe?</th><th>Cuándo usarlo</th><th>Compatible con</th></tr></thead>
+        <tbody>
+            <tr><td><strong>append</strong></td><td>Solo las filas NUEVAS del batch actual</td><td>Sin agregaciones, o con watermark</td><td>Select, filter, map, join con watermark</td></tr>
+            <tr><td><strong>complete</strong></td><td>La tabla de resultados COMPLETA en cada trigger</td><td>Agregaciones sin watermark (conteos globales)</td><td>groupBy + agg</td></tr>
+            <tr><td><strong>update</strong></td><td>Solo las filas que han CAMBIADO desde el último trigger</td><td>Agregaciones con o sin watermark</td><td>groupBy + agg</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — Ejemplo práctico de los 3 modos</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql.functions import count, avg
+
+# Conteo de eventos por sensor
+conteos = parsed.groupBy("sensor_id").agg(
+    count("*").alias("total_lecturas"),
+    avg("caudal_lpm").alias("caudal_medio")
+)
+
+# MODO COMPLETE: escribe toda la tabla en cada trigger
+q1 = conteos.writeStream \
+    .outputMode("complete") \
+    .format("console") \
+    .option("truncate", False) \
+    .start()
+
+# MODO UPDATE: solo los sensores cuyo conteo cambió
+q2 = conteos.writeStream \
+    .outputMode("update") \
+    .format("memory") \
+    .queryName("stats_sensores") \
+    .start()
+
+# Consultar la tabla en memory desde otra celda/proceso
+spark.sql("SELECT * FROM stats_sensores ORDER BY total_lecturas DESC").show()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     4. TRIGGERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>4. Triggers — ¿Con qué frecuencia procesar?</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql.streaming import DataStreamWriter
+
+# 1. Default: procesa el siguiente batch en cuanto termina el anterior
+df.writeStream.trigger()
+
+# 2. Fixed interval: procesa cada N segundos/minutos
+df.writeStream.trigger(processingTime="10 seconds")
+df.writeStream.trigger(processingTime="1 minute")
+
+# 3. Once: un único batch y para (útil para testing y migraciones)
+df.writeStream.trigger(once=True)
+
+# 4. Available Now: como Once pero procesa TODOS los datos disponibles
+#    (múltiples batches si hay mucha acumulación)
+df.writeStream.trigger(availableNow=True)
+
+# 5. Continuous (experimental): latencia ~1ms, sin micro-batches
+#    Solo soporta select/filter/map — sin agregaciones
+df.writeStream.trigger(continuous="1 second")</code></pre>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        Para la mayoría de casos de IoT y monitorización, <code>processingTime="5 seconds"</code> a <code>"30 seconds"</code> ofrece un buen balance entre latencia y overhead. Bajarlo mucho aumenta el overhead del scheduler sin reducir la latencia del negocio proporcionalmente.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     5. WINDOW OPERATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>5. Ventanas Temporales</h2>
+<p>Las ventanas son la forma de agrupar datos por tiempo en streaming. Se aplican sobre una columna de tipo timestamp.</p>
+
+<h3>5.1 Tumbling window (ventana fija sin solapamiento)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.functions import window, avg, max, min
+from pyspark.sql.functions import to_timestamp, col
+
+# Convertir epoch ms a timestamp si es necesario
+df_ts = parsed.withColumn(
+    "event_time",
+    to_timestamp(col("timestamp") / 1000)  # epoch ms → timestamp
+)
+
+# TUMBLING WINDOW: ventanas de 1 minuto sin solapamiento
+stats_1min = df_ts \
+    .groupBy(
+        window(col("event_time"), "1 minute"),  # ventana de 1 min
+        col("sensor_id")
+    ).agg(
+        avg("caudal_lpm").alias("caudal_medio"),
+        max("presion_bar").alias("pres_max"),
+        min("presion_bar").alias("pres_min")
+    )
+
+stats_1min.writeStream \
+    .outputMode("append") \
+    .format("console") \
+    .option("truncate", False) \
+    .start()</code></pre>
+</div>
+
+<h3>5.2 Sliding window (ventanas con solapamiento)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># SLIDING WINDOW: ventana de 5 minutos, avanza cada 1 minuto
+# Un evento pertenece a 5 ventanas distintas simultáneamente
+stats_sliding = df_ts \
+    .groupBy(
+        window(col("event_time"), "5 minutes", "1 minute"),
+        col("sensor_id")
+    ).agg(
+        avg("caudal_lpm").alias("caudal_medio_5m")
+    )
+
+# Salida: la ventana [09:00, 09:05) se actualiza cada minuto
+# con los nuevos datos que entran en esa ventana</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     6. WATERMARKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>6. Watermarks — Datos que llegan tarde</h2>
+
+<p>En sistemas reales los datos llegan desviados del orden temporal: un sensor puede mandar una lectura de las 09:00 cuando el sistema ya va por las 09:10. Sin watermark, Spark mantiene todas las ventanas abiertas indefinidamente consumiendo RAM. Con watermark le dices: <em>"espera máximo N minutos de retraso; después cierra la ventana"</em>.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql.functions import window, avg, col
+
+# withWatermark DEBE ir antes del groupBy
+df_with_watermark = df_ts \
+    .withWatermark("event_time", "2 minutes")  # acepta hasta 2 min de retraso
+
+stats_watermarked = df_with_watermark \
+    .groupBy(
+        window(col("event_time"), "1 minute"),
+        col("sensor_id")
+    ).agg(avg("caudal_lpm").alias("caudal_1m"))
+
+# Con watermark podemos usar outputMode="append":
+# Spark garantiza que una ventana cerrada no cambiará
+stats_watermarked.writeStream \
+    .outputMode("append") \       # ahora posible con watermark
+    .option("checkpointLocation", "/checkpoint/stats/") \
+    .format("parquet") \
+    .option("path", "/resultados/stats_1min/") \
+    .start()</code></pre>
+</div>
+
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        <strong>Watermark vs trigger:</strong> el watermark define cuánto tiempo esperas datos tardíos (latencia de evento). El trigger define con qué frecuencia Spark procesa (latencia de procesamiento). Son ortogonales — puedes tener trigger cada 10s y watermark de 5 minutos.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     7. CHECKPOINTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>7. Checkpointing y Tolerancia a Fallos</h2>
+
+<p>El checkpoint guarda el estado de la query (offsets procesados, estado de ventanas) en almacenamiento persistente. Si el job cae, se reinicia exactamente donde lo dejó — <strong>exactly-once semantics</strong>.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">query = df.writeStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "kafka:9092") \
+    .option("topic", "resultados-alertas") \
+    .option("checkpointLocation", "/checkpoint/alertas/") \
+    .outputMode("append") \
+    .trigger(processingTime="5 seconds") \
+    .start()
+
+# Monitorización de la query en curso
+print(f"Query ID: {query.id}")
+print(f"Status:   {query.status}")
+print(f"Progress: {query.lastProgress}")
+
+# Parar limpiamente
+query.stop()</code></pre>
+</div>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>¿Qué guarda el checkpoint?</th><th>Ubicación</th></tr></thead>
+        <tbody>
+            <tr><td>Offsets de Kafka procesados</td><td><code>checkpointLocation/offsets/</code></td></tr>
+            <tr><td>Estado de ventanas / stateful ops</td><td><code>checkpointLocation/state/</code></td></tr>
+            <tr><td>Commits confirmados (exactly-once)</td><td><code>checkpointLocation/commits/</code></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     8. STATEFUL OPERATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>8. Operaciones con Estado (Stateful)</h2>
+<p>Más allá de las agregaciones por ventana, puedes mantener estado arbitrario por clave con <code>mapGroupsWithState</code> / <code>flatMapGroupsWithState</code>. Esto permite detectar patrones complejos que cruzan múltiples micro-batches.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — Detector de sensor inactivo</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.streaming.state import GroupState, GroupStateTimeout
+from typing import Iterator, Tuple
+import datetime
+
+# Estado por sensor: última vez que recibimos datos
+class SensorState:
+    def __init__(self, last_seen: datetime.datetime, alerted: bool):
+        self.last_seen = last_seen
+        self.alerted   = alerted
+
+def update_sensor(
+    sensor_id: str,
+    inputs: Iterator,
+    state: GroupState
+) -> Iterator:
+    MAX_SILENCE = datetime.timedelta(seconds=30)  # si no da señal en 30s → alerta
+
+    now = datetime.datetime.now()
+    rows = list(inputs)
+
+    if state.hasTimedOut:
+        # No llegaron datos en el timeout configurado
+        yield (sensor_id, "INACTIVO", now)
+        state.remove()
+        return
+
+    # Actualizar última vez visto
+    st = state.get if state.exists else SensorState(now, False)
+    st.last_seen = now
+    st.alerted   = False
+    state.update(st)
+
+    # Programar timeout: si en 30s no llegan datos, lanzar alerta
+    state.setTimeoutDuration("30 seconds")
+
+    for row in rows:
+        yield (sensor_id, "OK", row.event_time)
+
+# Aplicar a un stream agrupado por sensor_id
+from pyspark.sql.functions import col
+
+result = df_ts \
+    .groupBy("sensor_id") \
+    .applyInPandasWithState(
+        update_sensor,
+        outputStructType="sensor_id STRING, estado STRING, ts TIMESTAMP",
+        stateStructType="last_seen TIMESTAMP, alerted BOOLEAN",
+        outputMode="append",
+        timeoutConf=GroupStateTimeout.ProcessingTimeTimeout
+    )
+
+result.writeStream.format("console").outputMode("append").start()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     9. PIPELINE KAFKA COMPLETO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>9. Pipeline Kafka completo — ejemplo end-to-end</h2>
+<p>Lectura de Kafka → detección de anomalía simple → escritura de alertas de vuelta a Kafka:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — Pipeline IoT completo</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    from_json, col, to_json, struct, lit,
+    when, to_timestamp
+)
+from pyspark.sql.types import *
+
+spark = SparkSession.builder \
+    .appName("MonitorAgua") \
+    .config("spark.jars.packages",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
+    .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
+
+# ── Schema ─────────────────────────────────────────
+schema = StructType([
+    StructField("sensor_id",   StringType()),
+    StructField("ts_epoch_ms", LongType()),
+    StructField("caudal_lpm",  DoubleType()),
+    StructField("presion_bar", DoubleType()),
+    StructField("temp_c",      DoubleType()),
+])
+
+# ── Lectura de Kafka ────────────────────────────────
+raw = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "kafka:9092") \
+    .option("subscribe", "sensores-agua") \
+    .option("startingOffsets", "latest") \
+    .load() \
+    .selectExpr("CAST(value AS STRING) AS json_str") \
+    .select(from_json("json_str", schema).alias("d")) \
+    .select("d.*") \
+    .withColumn("event_time",
+                to_timestamp(col("ts_epoch_ms") / 1000))
+
+# ── Lógica de negocio: detección básica ────────────
+# Caudal > 50 lpm O presión < 0.5 bar → posible fuga
+with_alert = raw.withColumn(
+    "alerta",
+    when(
+        (col("caudal_lpm") > 50) | (col("presion_bar") < 0.5),
+        lit("FUGA_POSIBLE")
+    ).otherwise(lit("OK"))
+)
+
+# Sólo emitir alertas reales a Kafka
+alertas = with_alert.filter(col("alerta") == "FUGA_POSIBLE") \
+    .select(
+        col("sensor_id").alias("key"),
+        to_json(struct(
+            "sensor_id", "event_time",
+            "caudal_lpm", "presion_bar", "alerta"
+        )).alias("value")
+    )
+
+# ── Escritura a Kafka (topic alertas) ──────────────
+query = alertas.writeStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "kafka:9092") \
+    .option("topic", "alertas-fugas") \
+    .option("checkpointLocation", "/tmp/checkpoint/alertas/") \
+    .outputMode("append") \
+    .trigger(processingTime="5 seconds") \
+    .start()
+
+query.awaitTermination()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     10. ERRORES COMUNES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>10. Errores comunes</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Error</th><th>Causa</th><th>Solución</th></tr></thead>
+        <tbody>
+            <tr><td><code>AnalysisException: Append output mode not supported</code></td><td>Usas <code>append</code> con <code>groupBy</code> sin watermark</td><td>Añade <code>.withWatermark(...)</code> antes del groupBy</td></tr>
+            <tr><td><code>StreamingQueryException: Kafka offset out of range</code></td><td>Los offsets del checkpoint ya no existen en Kafka</td><td>Cambiar <code>startingOffsets</code> a <code>"latest"</code> o borrar checkpoint</td></tr>
+            <tr><td><code>Cannot use sort with streaming</code></td><td><code>orderBy/sort</code> no se pueden usar en streaming</td><td>Ordenar DESPUÉS de <code>.writeStream</code> en sink o usar window functions</td></tr>
+            <tr><td><code>Multiple streaming aggregations not supported</code></td><td>Dos <code>groupBy</code> anidados en streaming</td><td>Separar en dos queries o usar FlatMapGroupsWithState</td></tr>
+            <tr><td>El checkpoint impide cambios de schema</td><td>Modificaste el schema de entrada con checkpoint activo</td><td>Borrar el checkpoint (se perderá el estado)</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     11. RESUMEN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>11. Resumen del módulo</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Concepto</th><th>API principal</th><th>Cuándo usarlo</th></tr></thead>
+        <tbody>
+            <tr><td>Lectura de stream</td><td><code>spark.readStream.format()</code></td><td>Siempre que los datos lleguen de forma continua</td></tr>
+            <tr><td>Output append</td><td><code>.outputMode("append")</code></td><td>Sin estado global o con watermark cerrado</td></tr>
+            <tr><td>Output complete</td><td><code>.outputMode("complete")</code></td><td>Conteos/sumas globales que se muestran enteros</td></tr>
+            <tr><td>Output update</td><td><code>.outputMode("update")</code></td><td>Actualizar solo lo que cambió (eficiente)</td></tr>
+            <tr><td>Ventana tumbling</td><td><code>window(ts, "1 minute")</code></td><td>Periodos fijos sin solapamiento</td></tr>
+            <tr><td>Watermark</td><td><code>.withWatermark(ts, "2 minutes")</code></td><td>Datos que llegan tarde, cerrar ventanas</td></tr>
+            <tr><td>Checkpoint</td><td><code>.option("checkpointLocation", ...)</code></td><td>Siempre en producción — obligatorio</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m5-mllib.html" class="btn btn-outline">← M5: MLlib</a>
+    <a href="lab-fugas.html" class="btn btn-primary">Lab: Detección de Fugas →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

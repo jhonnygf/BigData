@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M5: MLlib | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🧠</span>
+    <h1>M5 — <span class="gradient-text">Spark MLlib</span></h1>
+    <p>Machine Learning distribuido con Spark. Pipelines, transformers, estimators, validación cruzada y modelos desde clasificación hasta clustering a escala de petabytes.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. ARQUITECTURA MLLIB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. Arquitectura de MLlib: Transformer, Estimator, Pipeline</h2>
+
+<p>MLlib se estructura en tres conceptos que reflejan el ciclo real de ML: preparar datos, entrenar modelo, predecir.</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Concepto</th><th>¿Qué hace?</th><th>Ejemplo</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Transformer</strong></td><td>Transforma un DataFrame en otro. Tiene método <code>.transform(df)</code>. Ya está "configurado" — no aprende de datos.</td><td><code>VectorAssembler</code>, <code>Tokenizer</code>, modelo entrenado</td></tr>
+            <tr><td><strong>Estimator</strong></td><td>Aprende de datos. Tiene método <code>.fit(df)</code> que devuelve un <strong>Transformer</strong> (modelo).</td><td><code>RandomForestClassifier</code>, <code>StandardScaler</code></td></tr>
+            <tr><td><strong>Pipeline</strong></td><td>Secuencia de Transformers y Estimators. Es un <em>Estimator</em> que al hacer <code>.fit()</code> ejecuta toda la cadena.</td><td><code>Pipeline(stages=[scaler, clf])</code></td></tr>
+            <tr><td><strong>PipelineModel</strong></td><td>Pipeline ya entrenado — solo Transformers. Listo para predecir.</td><td>Resultado de <code>pipeline.fit(df_train)</code></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.ml import Pipeline
+from pyspark.ml.feature import (
+    VectorAssembler, StringIndexer, OneHotEncoder, StandardScaler
+)
+from pyspark.ml.classification import RandomForestClassifier
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+spark = SparkSession.builder.master("local[*]").appName("m5-mllib").getOrCreate()
+
+# Dataset de ejemplo: predicción de churn
+datos = spark.createDataFrame([
+    (1, "ES", 24, 850.0, 3, 0),
+    (2, "FR", 35, 1500.0, 8, 0),
+    (3, "DE", 28, 200.0,  1, 1),   # churn=1
+    (4, "ES", 45, 4500.0, 15, 0),
+    (5, "FR", 22, 100.0,  0, 1),   # churn=1
+    (6, "DE", 38, 2200.0, 9, 0),
+    (7, "ES", 29, 300.0,  2, 1),
+    (8, "FR", 52, 5000.0, 20, 0),
+], ["id", "pais", "edad", "ltv", "meses", "churn"])
+
+# Train/test split
+df_train, df_test = datos.randomSplit([0.75, 0.25], seed=42)
+print(f"Train: {df_train.count()}, Test: {df_test.count()}")</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. FEATURE ENGINEERING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. Feature Engineering: preparar los datos</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># ── StringIndexer: string → índice numérico (0, 1, 2...)
+#    Necesario porque los modelos de Spark solo aceptan números
+indexer = StringIndexer(
+    inputCol="pais",
+    outputCol="pais_idx",
+    handleInvalid="keep"   # "error", "keep" (categoría extra), "skip"
+)
+
+# ── OneHotEncoder: índice → vector binario (0/1)
+#    [0, 1, 2] → [[1,0,0], [0,1,0], [0,0,1]]
+encoder = OneHotEncoder(inputCols=["pais_idx"], outputCols=["pais_ohe"])
+
+# ── VectorAssembler: juntar todas las features en un Vector
+assembler = VectorAssembler(
+    inputCols=["pais_ohe", "edad", "ltv", "meses"],
+    outputCol="features_raw",
+    handleInvalid="skip"
+)
+
+# ── StandardScaler: normalizar a media=0, std=1
+scaler = StandardScaler(
+    inputCol="features_raw",
+    outputCol="features",
+    withMean=True,   # centrar en 0
+    withStd=True     # escalar a std=1
+)
+
+# Sin Pipeline: aplicar manualmente (para entender qué hace cada paso)
+modelo_indexer = indexer.fit(df_train)
+df_idx = modelo_indexer.transform(df_train)
+df_idx.select("pais", "pais_idx").show(6)
+# +----+--------+
+# |pais|pais_idx|
+# +----+--------+
+# |  ES|     0.0|
+# |  FR|     1.0|
+# |  DE|     2.0|</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. PIPELINE COMPLETO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. Pipeline completo: clasificación binaria</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># ── Renombrar la etiqueta (los clasificadores esperan columna "label")
+df_train_ml = df_train.withColumnRenamed("churn", "label")
+df_test_ml  = df_test.withColumnRenamed("churn", "label")
+
+# ── Clasificador
+rf = RandomForestClassifier(
+    featuresCol="features",
+    labelCol="label",
+    numTrees=100,
+    maxDepth=5,
+    seed=42
+)
+
+# ── Pipeline: cadena de etapas
+pipeline = Pipeline(stages=[indexer, encoder, assembler, scaler, rf])
+
+# ── Entrenamiento: fit ejecuta TODOS los Estimators en orden
+modelo = pipeline.fit(df_train_ml)
+print(type(modelo))  # <class 'pyspark.ml.pipeline.PipelineModel'>
+
+# ── Predicción: transform ejecuta TODOS los Transformers en orden
+predicciones = modelo.transform(df_test_ml)
+predicciones.select("id", "label", "prediction", "probability").show()
+# +---+-----+----------+--------------------+
+# | id|label|prediction|         probability|
+# +---+-----+----------+--------------------+
+# |  3|    1|       1.0|[0.12, 0.88]        |
+# |  5|    1|       1.0|[0.09, 0.91]        |
+
+# ── Evaluación
+evaluator = BinaryClassificationEvaluator(
+    labelCol="label",
+    rawPredictionCol="rawPrediction",
+    metricName="areaUnderROC"  # "areaUnderPR" también disponible
+)
+auc = evaluator.evaluate(predicciones)
+print(f"AUC-ROC: {auc:.4f}")</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     4. OTROS MODELOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>4. Catálogo de modelos disponibles</h2>
+
+<h3>4.1 GBT (Gradient Boosted Trees)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.ml.classification import GBTClassifier
+
+gbt = GBTClassifier(
+    featuresCol="features",
+    labelCol="label",
+    maxIter=50,
+    maxDepth=4,
+    stepSize=0.1,
+    seed=42
+)
+# GBT no soporta multiclass directo — solo binario en Spark MLlib</code></pre>
+</div>
+
+<h3>4.2 Regresión lineal</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+
+lr = LinearRegression(
+    featuresCol="features",
+    labelCol="label",
+    maxIter=100,
+    regParam=0.1,    # regularización L2 (Ridge)
+    elasticNetParam=0.0  # 0=Ridge, 1=Lasso, [0,1]=ElasticNet
+)
+# modelo_lr = Pipeline(stages=[...preproceso..., lr]).fit(df_train)
+# evaluador = RegressionEvaluator(metricName="rmse")  # "r2", "mae", "mse"</code></pre>
+</div>
+
+<h3>4.3 K-Means clustering</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import ClusteringEvaluator
+
+kmeans = KMeans(
+    featuresCol="features",
+    predictionCol="cluster",
+    k=3,
+    maxIter=20,
+    seed=42
+)
+modelo_km = Pipeline(stages=[assembler, scaler, kmeans]).fit(datos)
+clustered = modelo_km.transform(datos)
+
+# Silhouette score
+evaluator_km = ClusteringEvaluator(
+    predictionCol="cluster",
+    featuresCol="features",
+    metricName="silhouette"
+)
+silhouette = evaluator_km.evaluate(clustered)
+print(f"Silhouette: {silhouette:.4f}")</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     5. CROSS VALIDATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>5. Cross-Validation y tuning de hiperparámetros</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+
+# Construir grid de hiperparámetros
+param_grid = (ParamGridBuilder()
+    .addGrid(rf.numTrees, [50, 100, 200])
+    .addGrid(rf.maxDepth, [3, 5, 8])
+    .build()  # genera 3 × 3 = 9 combinaciones
+)
+
+# CrossValidator: k-fold CV
+cv = CrossValidator(
+    estimator=pipeline,
+    estimatorParamMaps=param_grid,
+    evaluator=evaluator,
+    numFolds=3,       # 3-fold cross validation
+    seed=42,
+    parallelism=2     # entrenar 2 modelos en paralelo (ajustar a CPUs)
+)
+cv_modelo = cv.fit(df_train_ml)
+
+# Mejor modelo
+mejor = cv_modelo.bestModel
+print("Mejor numTrees:", mejor.stages[-1].getNumTrees)  # acceder al último stage (RF)
+
+# Las métricas de cada fold
+print(cv_modelo.avgMetrics)   # lista de AUC medios por combinación de params</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     6. PERSISTENCIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>6. Guardar y cargar modelos</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># Guardar el PipelineModel completo (preproceso + modelo)
+modelo.write().overwrite().save("/modelos/churn_v1")
+
+# Guardar solo el CrossValidator model
+cv_modelo.bestModel.write().overwrite().save("/modelos/churn_cv_best")
+
+# Cargar
+from pyspark.ml import PipelineModel
+modelo_cargado = PipelineModel.load("/modelos/churn_v1")
+
+# Predecir con modelo cargado (en otro proceso/sesión Spark)
+nuevos = spark.createDataFrame([
+    {"id": 99, "pais": "ES", "edad": 31, "ltv": 750.0, "meses": 4, "churn": 0}
+])
+resultado = modelo_cargado.transform(nuevos.withColumnRenamed("churn", "label"))
+resultado.select("id", "prediction", "probability").show()</code></pre>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        <strong>MLlib vs scikit-learn en Spark:</strong> si tus datos caben en una sola máquina (&lt;50GB), usa scikit-learn y Pandas — es más rápido y flexible. Usa MLlib cuando tus datos no caben en RAM o necesitas entrenar sobre datos que ya están en un cluster Spark.
+    </div>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m4-spark-sql.html" class="btn btn-outline">← M4: Spark SQL</a>
+    <a href="m6-streaming.html" class="btn btn-primary">M6: Streaming →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

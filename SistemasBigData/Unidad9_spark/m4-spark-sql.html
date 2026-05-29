@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M4: Spark SQL & Optimización | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🔍</span>
+    <h1>M4 — <span class="gradient-text">Spark SQL & Optimización</span></h1>
+    <p>Catalyst, el optimizador de consultas de Spark. SQL sobre DataFrames, Parquet, particionado y estrategias para evitar los cuellos de botella en producción.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. CATALYST OPTIMIZER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. Catalyst: el optimizador de consultas</h2>
+
+<p>Cuando escribes <code>df.filter(...).groupBy(...).agg(...)</code>, no se ejecuta tal cual. El optimizador <strong>Catalyst</strong> convierte tu consulta en 4 planes antes de ejecutar nada:</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Plan</th><th>¿Qué hace?</th></tr></thead>
+        <tbody>
+            <tr><td><strong>1. Lógico no resuelto</strong></td><td>El AST de tu consulta — columnas sin verificar</td></tr>
+            <tr><td><strong>2. Lógico analizado</strong></td><td>Resuelve nombres de columnas, tipos, tablas</td></tr>
+            <tr><td><strong>3. Lógico optimizado</strong></td><td>Predicate pushdown, column pruning, constant folding, join reordering…</td></tr>
+            <tr><td><strong>4. Físico</strong></td><td>Elige algoritmos concretos: SortMergeJoin vs BroadcastHashJoin, etc.</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, avg, count
+
+spark = SparkSession.builder.master("local[*]").appName("m4-sql") \
+    .config("spark.sql.adaptive.enabled", "true") \
+    .getOrCreate()
+
+df = spark.read.parquet("/datos/ventas_2024/")
+
+plan_query = (df
+    .filter(col("pais") == "ES")
+    .select("producto", "importe", "categoria")
+    .groupBy("categoria")
+    .agg(avg("importe").alias("ticket_medio"), count("*").alias("n_ventas"))
+)
+
+# Ver todos los planes
+plan_query.explain()          # solo plan físico
+plan_query.explain("simple")  # físico simple
+plan_query.explain("extended") # los 4 planes
+
+# plan físico típico — Catalyst ha empujado el filtro ANTES del groupBy:
+# == Physical Plan ==
+# *(2) HashAggregate(keys=[categoria#5], ...)
+# +- Exchange hashpartitioning(categoria#5, ...)
+#    +- *(1) HashAggregate(keys=[categoria#5], ...)
+#       +- *(1) Project [producto#3, importe#4, categoria#5]
+#          +- *(1) Filter (isnotnull(pais#6) AND (pais#6 = ES))  ← pushdown
+#             +- *(1) ColumnarToRow
+#                +- FileScan parquet [...]</code></pre>
+</div>
+
+<h3>1.1 AQE — Adaptive Query Execution</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># AQE reoptimiza el plan EN TIEMPO DE EJECUCIÓN basándose en estadísticas reales
+spark.conf.set("spark.sql.adaptive.enabled", "true")
+spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")  # reduce particiones vacías
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")           # maneja skew automáticamente
+
+# Skew = partición mucho más grande que el resto → un executor hace todo el trabajo
+# AQE skewJoin divide la partición skewed en sub-particiones
+
+# Ver configuración actual
+spark.conf.get("spark.sql.adaptive.enabled")</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. SPARK SQL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. Spark SQL: texto SQL sobre DataFrames</h2>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">datos = [
+    {"id": 1, "producto": "Laptop", "categoria": "Tech",    "importe": 899.0,  "pais": "ES"},
+    {"id": 2, "producto": "Teclado", "categoria": "Tech",   "importe": 79.0,   "pais": "ES"},
+    {"id": 3, "producto": "Silla",   "categoria": "Oficina","importe": 350.0,  "pais": "FR"},
+    {"id": 4, "producto": "Monitor", "categoria": "Tech",   "importe": 450.0,  "pais": "ES"},
+    {"id": 5, "producto": "Mesa",    "categoria": "Oficina","importe": 280.0,  "pais": "DE"},
+]
+df_ventas = spark.createDataFrame(datos)
+
+# Registrar como vista SQL temporal (en memoria de la sesión Spark)
+df_ventas.createOrReplaceTempView("ventas")
+
+# Consultar con SQL puro
+resultado = spark.sql("""
+    SELECT
+        categoria,
+        COUNT(*) AS n,
+        ROUND(AVG(importe), 2) AS ticket_medio,
+        MAX(importe) AS max_venta
+    FROM ventas
+    WHERE pais = 'ES'
+    GROUP BY categoria
+    ORDER BY ticket_medio DESC
+""")
+resultado.show()
+
+# Vista global (persiste entre sesiones de la misma aplicación)
+df_ventas.createOrReplaceGlobalTempView("ventas_global")
+spark.sql("SELECT * FROM global_temp.ventas_global WHERE importe > 200").show()
+
+# SQL y DataFrame API producen el mismo plan — 100% equivalentes
+# SQL:  spark.sql("SELECT producto, importe FROM ventas WHERE pais='ES'")
+# API:  df_ventas.filter(col("pais")=="ES").select("producto","importe")</code></pre>
+</div>
+
+<h3>2.1 SQL avanzado: CTEs y subqueries</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># CTEs (Common Table Expressions)
+spark.sql("""
+    WITH ventas_es AS (
+        SELECT * FROM ventas WHERE pais = 'ES'
+    ),
+    por_categoria AS (
+        SELECT categoria,
+               ROUND(AVG(importe), 2) AS media,
+               COUNT(*) AS n
+        FROM ventas_es
+        GROUP BY categoria
+    )
+    SELECT *,
+           RANK() OVER (ORDER BY media DESC) AS rank_cat
+    FROM por_categoria
+""").show()
+
+# Subquery escalar
+spark.sql("""
+    SELECT *,
+           importe - (SELECT AVG(importe) FROM ventas) AS diff_media
+    FROM ventas
+    WHERE pais = 'ES'
+""").show()
+
+# Funciones de ventana en SQL
+spark.sql("""
+    SELECT
+        producto, importe, pais,
+        ROW_NUMBER() OVER (PARTITION BY pais ORDER BY importe DESC) AS rank_pais,
+        LAG(importe, 1) OVER (PARTITION BY pais ORDER BY importe DESC) AS importe_anterior
+    FROM ventas
+""").show()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. LECTURA Y ESCRITURA: PARQUET / CSV / JSON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. Lectura y escritura de datos</h2>
+
+<h3>3.1 Parquet — el formato estándar de Spark</h3>
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        <strong>¿Por qué Parquet?</strong> Almacenamiento columnar, compresión nativa (Snappy/Zstd), schema embebido, predicate pushdown, column pruning. En benchmarks, leer 10 columnas de 100 con Parquet puede ser 30× más rápido que con CSV.
+    </div>
+</div>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># Escribir Parquet
+df_ventas.write.mode("overwrite").parquet("/tmp/ventas.parquet")
+
+# Particionado por columna (crea subdirectorios pais=ES/, pais=FR/...)
+df_ventas.write \
+    .mode("overwrite") \
+    .partitionBy("pais", "categoria") \
+    .parquet("/tmp/ventas_part/")
+
+# Leer — Catalyst empuja el filtro al nivel de fichero (solo lee partición ES)
+df_leido = spark.read.parquet("/tmp/ventas_part/").filter(col("pais") == "ES")
+df_leido.explain()  # PushedFilters: [IsNotNull(pais), EqualTo(pais,ES)]
+
+# Opciones avanzadas de escritura
+df_ventas.write \
+    .mode("append") \          # overwrite, append, ignore, error
+    .option("compression", "snappy") \  # snappy, gzip, zstd, none
+    .parquet("/tmp/ventas_snappy/")</code></pre>
+</div>
+
+<h3>3.2 Delta Lake (opcional pero recomendado en producción)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># Delta Lake añade ACID transactions, time travel y schema enforcement a Parquet
+# Configurar en SparkSession:
+# .config("spark.jars.packages", "io.delta:delta-core_2.12:2.4.0")
+# .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+# .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+
+# Escribir
+df_ventas.write.format("delta").mode("overwrite").save("/tmp/delta/ventas")
+
+# Leer
+df_delta = spark.read.format("delta").load("/tmp/delta/ventas")
+
+# Time travel: leer versión anterior
+df_ayer = spark.read.format("delta").option("versionAsOf", 0).load("/tmp/delta/ventas")
+
+# MERGE (upsert)
+# from delta.tables import DeltaTable
+# dt = DeltaTable.forPath(spark, "/tmp/delta/ventas")
+# dt.alias("t").merge(nuevos.alias("n"), "t.id = n.id")
+#   .whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     4. JOINS: ESTRATEGIAS Y SKEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>4. Estrategias de join y manejo de skew</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Estrategia</th><th>Cuándo</th><th>Coste</th></tr></thead>
+        <tbody>
+            <tr><td><strong>BroadcastHashJoin</strong></td><td>Un DF cabe en memoria del driver (&lt;10MB por defecto)</td><td>Muy bajo — no hay shuffle</td></tr>
+            <tr><td><strong>SortMergeJoin</strong></td><td>Ambos DF grandes, se ordenan y mezclan</td><td>Alto — shuffle de red</td></tr>
+            <tr><td><strong>ShuffleHashJoin</strong></td><td>Un DF cabe en memoria por partición</td><td>Medio</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from pyspark.sql.functions import broadcast
+
+# Forzar Broadcast
+df_ventas.join(broadcast(df_paises), on="pais").explain()
+# → BroadcastHashJoin
+
+# Configurar umbral (defecto: 10MB)
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 50 * 1024 * 1024)  # 50MB
+
+# Deshabilitar auto-broadcast
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+
+# ── Manejo de SKEW (AQE) ──
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", 5)     # >5x la mediana
+spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionThresholdInBytes", "256m")
+
+# ── Salting manual para skew extremo ──
+# (cuando el 90% de filas tiene el mismo valor en la clave de join)
+import random
+from pyspark.sql.functions import concat_ws, lit, pmod, monotonically_increasing_id
+
+N_SALT = 10
+df_grande_salted = df_grande.withColumn(
+    "clave_salt",
+    concat_ws("_", col("clave"), (pmod(monotonically_increasing_id(), lit(N_SALT))).cast("string"))
+)
+df_peq_salted = df_peq.withColumn(
+    "_salt_explode",
+    F.explode(F.array([lit(i) for i in range(N_SALT)]))
+).withColumn("clave_salt", concat_ws("_", col("clave"), col("_salt_explode").cast("string")))
+
+df_resultado = df_grande_salted.join(df_peq_salted, on="clave_salt")</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     5. TUNGSTEN & COLUMNAR EXECUTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>5. Tungsten: motor de ejecución de bajo nivel</h2>
+
+<p>Tungsten es la capa que hace que DataFrames sean hardware-efficient: gestión manual de memoria (off-heap), generación de bytecode JVM en tiempo de ejecución (Whole-stage code gen) y procesamiento vectorizado (Arrow).</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># Configuraciones Tungsten relevantes
+spark.conf.set("spark.sql.codegen.wholeStage", "true")              # code gen (defecto true)
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true") # Apache Arrow para toPandas/fromPandas
+
+# Arrow acelera drásticamente la conversión Spark ↔ Pandas
+import pandas as pd
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+
+# 10× más rápido con Arrow activado
+pandas_df = df_ventas.toPandas()
+df_desde_pandas = spark.createDataFrame(pandas_df)
+
+# Pandas UDFs (vectorizadas con Arrow — mucho más rápidas que UDFs Python normales)
+from pyspark.sql.functions import pandas_udf
+from pyspark.sql.types import DoubleType
+import pandas as pd
+
+@pandas_udf(DoubleType())
+def calcular_neto(s: pd.Series) -> pd.Series:
+    """UDF vectorizada — opera sobre Series de pandas, no fila a fila."""
+    return s * 0.78
+
+df_ventas.withColumn("importe_neto", calcular_neto(col("importe"))).show()</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     6. SHUFFLE Y PARTICIONADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>6. Shuffle, particionado y número de particiones</h2>
+
+<div class="info-box warning">
+    <div class="info-box-icon">⚠️</div>
+    <div class="info-box-text">
+        <strong>El shuffle es el mayor coste de rendimiento en Spark.</strong> Ocurre en: groupBy, join (SortMerge), repartition, distinct, orderBy a gran escala. Cada shuffle implica escribir datos a disco y leerlos en red.
+    </div>
+</div>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code"># Número de particiones de shuffle (defecto: 200)
+# Si tienes pocas filas, 200 particiones son ineficientes (overhead)
+spark.conf.set("spark.sql.shuffle.partitions", "50")  # ajustar a tu cluster
+
+# Ver cuántas particiones tiene un DF
+print(df_ventas.rdd.getNumPartitions())  # 4 (= CPU cores en local mode)
+
+# repartition: SHUFFLE — redistribuye aleatoriamente
+df_200 = df_ventas.repartition(200)
+df_por_pais = df_ventas.repartition(10, "pais")  # hash-partition por "pais"
+
+# coalesce: SIN shuffle — solo reduce particiones (une particiones existentes)
+# Más eficiente que repartition cuando reduces
+df_small = df_ventas.coalesce(4)
+
+# Cuándo usar cada uno:
+# repartition(n): para aumentar particiones o redistribuir antes de join/groupBy
+# repartition(n, col): para hash-partition antes de join repetidos por esa clave
+# coalesce(n): solo para REDUCIR particiones (antes de escribir, por ejemplo)</code></pre>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m3-rdd-dataframes.html" class="btn btn-outline">← M3: RDD/DataFrames</a>
+    <a href="m5-mllib.html" class="btn btn-primary">M5: MLlib →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

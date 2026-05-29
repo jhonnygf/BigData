@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M1: Fundamentos & Docker | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">🏗️</span>
+    <h1>M1 — <span class="gradient-text">Fundamentos & Docker</span></h1>
+    <p>Por qué existe Spark, cómo funciona por dentro y cómo levantarlo en tu máquina con Docker en menos de 5 minutos.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. EL PROBLEMA Y LA ANALOGÍA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. ¿Por qué necesitamos Spark? (Empezando desde cero)</h2>
+
+<p>Para entender Spark, primero tenemos que entender el problema de la computación clásica. Imagina que tienes que preparar la cena para 4 personas. Eres un único cocinero en tu cocina. Tienes un cuchillo, una tabla de cortar y una olla. Picas las verduras, haces el sofrito, hierves la pasta. Tarde o temprano, la cena estará lista. Esto es el procesamiento tradicional (como hacer un script en Python o usar <strong>Pandas</strong> en tu portátil).</p>
+
+<p>Ahora imagina que te contratan para hacer la cena para <strong>10.000 personas</strong>.</p>
+<p>Si sigues siendo un solo cocinero (tu ordenador), no importa lo rápido que piques, jamás terminarás a tiempo. Tienes dos opciones para resolver esto:</p>
+
+<div class="two-col">
+    <div class="mini-card">
+        <h5>Opción A: Escalado Vertical (Mejorar el cocinero)</h5>
+        <p>Te conviertes en un superhumano con 8 brazos, compras una tabla de cortar del tamaño de un coche y una olla gigante. En informática, esto es comprar un servidor con 128 cores de CPU y 2TB de RAM.</p>
+        <ul>
+            <li><strong>Pros:</strong> No tienes que cambiar tu forma de programar (el mismo código de Pandas sigue funcionando).</li>
+            <li><strong>Contras:</strong> Es absurdamente caro y existe un límite físico (no puedes comprar un servidor infinito).</li>
+        </ul>
+    </div>
+    <div class="mini-card">
+        <h5>Opción B: Escalado Horizontal (Contratar más cocineros)</h5>
+        <p>Contratas a 50 cocineros normales. A uno le das las cebollas, a otro los tomates. Trabajan a la vez. En informática, esto es conectar 50 ordenadores normales (un <strong>Cluster</strong>).</p>
+        <ul>
+            <li><strong>Pros:</strong> Infinitamente escalable y barato.</li>
+            <li><strong>Contras:</strong> Alguien tiene que coordinar a los 50 cocineros, si no, será el caos.</li>
+        </ul>
+    </div>
+</div>
+
+<p><strong>Spark es el jefe de cocina de la Opción B.</strong> Es un motor que sabe cómo coger un conjunto de datos gigante, dividirlo en trocitos, repartirlo entre decenas de ordenadores, coordinar el trabajo en paralelo y juntar el resultado sin que tú tengas que volverte loco programando redes y transferencias de datos.</p>
+
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        <strong>Un poco de historia (Hadoop vs Spark):</strong> Antes de Spark, el rey del Big Data era <em>Hadoop MapReduce</em>. El problema de los cocineros de Hadoop era que no tenían memoria RAM (no sabían retener información en la cabeza). Por cada paso de la receta, tenían que escribir el resultado en un disco duro y volver a leerlo para el siguiente paso. Spark revolucionó todo en 2009 porque permitió a los ordenadores <strong>mantener los datos intermedios vivos en la memoria RAM</strong>, volviéndose hasta 100 veces más rápido para tareas complejas.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. VOCABULARIO CORE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. Conceptos Core: El vocabulario de Spark</h2>
+
+<p>Antes de sumergirnos en la arquitectura técnica, vamos a aprender tres conceptos fundamentales que dictan cómo "piensa" Spark.</p>
+
+<h3>2.1 El Cluster: Master y Workers</h3>
+<p>Un <strong>Cluster</strong> no es más que un grupo de ordenadores conectados en red trabajando juntos como si fueran uno solo. En Spark, estos ordenadores tienen roles estrictamente definidos:</p>
+<ul>
+    <li><strong>El Nodo Master (Maestro):</strong> Es el director de la orquesta. Él no toca ningún instrumento ni procesa datos pesados, solo decide quién tiene que tocar qué.</li>
+    <li><strong>Los Nodos Worker (Trabajadores):</strong> Son los ordenadores que hacen la fuerza bruta. Reciben órdenes del Master, procesan los datos con su CPU y devuelven el resultado.</li>
+</ul>
+
+<h3>2.2 Evaluación Perezosa (Lazy Evaluation)</h3>
+<p>Spark es extremadamente vago (perezoso). Si tú le dices a Spark en tu código: <em>"Carga este archivo de 10GB, filtra los usuarios de España, pon los nombres en mayúsculas"</em>... <strong>Spark no hace absolutamente nada en ese momento.</strong></p>
+<p>En su lugar, Spark simplemente coge una libreta y anota tus instrucciones: "Vale, cuando el jefe me lo exija, cargaré, filtraré y pondré en mayúsculas". Spark solo se pone a trabajar cuando le pides un <strong>resultado final que deba salir del cluster</strong> (por ejemplo: "Muéstrame los datos por pantalla" o "Guarda esto en un archivo").</p>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        <strong>¿Por qué ser vago es una súper-ventaja?</strong> Porque le da tiempo a Spark a optimizar. Si le dices "filtra usuarios de España" y luego "dame solo el primer usuario que encuentres", Spark es lo suficientemente inteligente para no filtrar los 10GB. Buscará hasta encontrar a un español, y parará. Si no fuera <em>lazy</em>, habría leído y filtrado el archivo entero inútilmente.
+    </div>
+</div>
+
+<h3>2.3 Transformaciones vs. Acciones</h3>
+<p>Por tanto, todo el código que escribas en Spark se divide en dos grandes familias:</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Tipo</th><th>¿Qué hace?</th><th>¿Dispara el trabajo?</th><th>Ejemplos comunes</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Transformación</strong></td>
+                <td>Devuelve un nuevo DataFrame modificado. Son las instrucciones anotadas en la libreta. (Es Lazy).</td>
+                <td>❌ NO</td>
+                <td><code>filter()</code>, <code>select()</code>, <code>groupBy()</code>, <code>withColumn()</code></td>
+            </tr>
+            <tr>
+                <td><strong>Acción</strong></td>
+                <td>Devuelve un valor a tu código Python o escribe a disco. Obliga a Spark a ejecutar el plan acumulado.</td>
+                <td>✅ SÍ</td>
+                <td><code>count()</code>, <code>show()</code>, <code>collect()</code>, <code>write()</code></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. ARQUITECTURA: DRIVER Y EXECUTORS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. La Arquitectura de Spark (Paso a paso)</h2>
+
+<p>Ahora que entendemos la dinámica Master/Worker, vamos a ponerles los nombres técnicos exactos que Spark utiliza internamente.</p>
+
+<div class="diagram-container" onclick="openDiagram(this)">
+<pre class="mermaid">
+graph LR
+    subgraph Tu Portátil / Servidor principal
+        D["DRIVER<br/>(Tu script de Python)"]
+    end
+
+    subgraph Cluster Manager
+        CM["YARN / K8s / Standalone<br/>(Gestor de Recursos)"]
+    end
+
+    subgraph Cluster de Servidores Workers
+        E1["EXECUTOR 1<br/>(JVM procesando datos)"]
+        E2["EXECUTOR 2<br/>(JVM procesando datos)"]
+        E3["EXECUTOR N<br/>(JVM procesando datos)"]
+    end
+
+    D -- "1. Pide servidores" --> CM
+    CM -. "2. Te concedo estos Workers" .-> D
+    D -- "3. Manda Tareas" --> E1
+    D -- "3. Manda Tareas" --> E2
+    D -- "3. Manda Tareas" --> E3
+    E1 -. "4. Devuelve resultados" .-> D
+
+    classDef driverNode fill:#1e40af,stroke:#93c5fd,color:#ffffff,stroke-width:2px
+    classDef cmNode fill:#6d28d9,stroke:#d8b4fe,color:#ffffff,stroke-width:2px
+    classDef execNode fill:#15803d,stroke:#4ade80,color:#ffffff,stroke-width:2px
+
+    class D driverNode
+    class CM cmNode
+    class E1,E2,E3 execNode
+</pre>
+</div>
+<!-- botón cerrar compartido para todos los diagramas -->
+<button id="lightbox-close" class="lightbox-close-btn" onclick="closeDiagram()">✕</button>
+
+<h3>Fase 1: El Driver (El Arquitecto)</h3>
+<p>El <strong>Driver</strong> es el proceso principal. Es literalmente el script de Python que tú ejecutas. En él vive la <code>SparkSession</code> (la puerta de entrada a Spark). El Driver toma todas tus "Transformaciones", construye el plan de ejecución optimizado, y coordina a los Executors.</p>
+<p><strong>REGLA DE ORO:</strong> El Driver <em>no procesa datos</em>. Su memoria suele ser modesta (ej. 2GB). Su misión es puramente organizativa.</p>
+
+<h3>Fase 2: El Cluster Manager (El Departamento de RRHH)</h3>
+<p>Cuando el Driver decide el plan, necesita fuerza bruta. El Driver llama al <strong>Cluster Manager</strong> y le dice: <em>"Necesito 10 procesos con 4 cores y 16GB de RAM cada uno"</em>. El Cluster Manager (que puede ser Spark Standalone, YARN, o Kubernetes) es el ente que sabe qué servidores físicos están encendidos y libres, y reserva los recursos para el Driver.</p>
+
+<h3>Fase 3: Los Executors (Los Obreros)</h3>
+<p>Los <strong>Executors</strong> son procesos de Java (JVM) que arrancan en los servidores Worker gracias a la petición del Driver. Son los verdaderos héroes. Reciben tareas individuales del Driver, procesan su trozo de datos, los guardan en su propia caché si hace falta, y envían los agregados finales al Driver.</p>
+
+<div class="info-box danger">
+    <div class="info-box-icon">🚨</div>
+    <div class="info-box-text">
+        <strong>El error más letal en Spark (OOM - Out of Memory):</strong> Si tienes un dataset de 50GB distribuido felizmente en 10 Executors y llamas a la acción <code>df.collect()</code>, le estás ordenando a todos los Executors: <em>"Enviadme absolutamente todas vuestras filas a mí, al Driver"</em>. Como el Driver es solo un proceso que quizá tiene 2GB de RAM, la memoria colapsará instantáneamente y tu aplicación explotará. Usa siempre <code>.show()</code> para ver un poco o escribe directamente a disco distribuido.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     4. JOB, STAGE, TASK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>4. El viaje de tu código: Job, Stage y Task</h2>
+
+<p>Spark es extremadamente metódico. Cuando tú ejecutas una <strong>Acción</strong>, no manda todo el bloque de código a los Executors a lo loco. Lo disecciona en unidades manejables.</p>
+
+<p>Imagina que escribimos esto:</p>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>df = spark.read.csv("ventas_gigantes.csv")
+# Una cadena de transformaciones...
+resultado = df.filter(df.pais == 'ES').groupBy("ciudad").count()
+# ¡ACCIÓN!
+resultado.show()</code></pre>
+</div>
+
+<p>Internamente, Spark aplica una jerarquía estricta:</p>
+
+<ol class="steps">
+    <li class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+            <h5>JOB (El objetivo final)</h5>
+            <p>Al ejecutar la acción <code>show()</code>, nace un <strong>Job</strong> (Trabajo). Un Job engloba todo el esfuerzo computacional necesario para calcular y devolver el resultado de esa única acción.</p>
+        </div>
+    </li>
+    <li class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+            <h5>STAGE (Las Fases / Paradas obligatorias)</h5>
+            <p>Spark divide el Job en <strong>Stages</strong> (Etapas). ¿Por qué existen? Por culpa de la red. Imagina que filtrar los españoles (<code>filter</code>) es algo que cada Executor puede hacer en aislamiento con su trozo del CSV. Pero para <code>groupBy("ciudad")</code>, todas las ventas de Madrid que estaban esparcidas por diferentes Executors tienen que viajar por la red y juntarse en un solo Executor para poder ser sumadas. Este movimiento masivo de datos por red se llama <strong>Shuffle</strong>.</p>
+            <p><strong>Un Shuffle marca obligatoriamente el fin de un Stage y el inicio del siguiente.</strong> Los Stages se tienen que ejecutar en orden (el Stage 2 no puede empezar hasta que el Stage 1 acabe el Shuffle).</p>
+        </div>
+    </li>
+    <li class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+            <h5>TASK (La unidad atómica de trabajo)</h5>
+            <p>Cada Stage se fragmenta en cientos o miles de <strong>Tasks</strong>. Un Task es una sola orden a un solo Core de CPU sobre un solo fragmento de datos: "<em>Oye tú, coge estos 128MB del CSV, aplica el filtro y espera</em>". Si tu cluster tiene 100 cores en total, Spark puede mandar a procesar 100 Tasks a la vez, en perfecto paralelismo.</p>
+        </div>
+    </li>
+</ol>
+
+<div class="diagram-container" onclick="openDiagram(this)">
+<pre class="mermaid">
+graph TD
+    subgraph "JOB 1"
+        subgraph "STAGE 1 (Filtro en paralelo)"
+            T1["Task 1<br/>Lee bloque 1 -> Filtra"]
+            T2["Task 2<br/>Lee bloque 2 -> Filtra"]
+            T3["Task N<br/>Lee bloque N -> Filtra"]
+        end
+        
+        SHUFFLE((Movimiento<br/>por Red<br/>SHUFFLE))
+        
+        subgraph "STAGE 2 (Agrupación Final)"
+            T4["Task A<br/>Suma todo lo de Madrid"]
+            T5["Task B<br/>Suma todo lo de Barcelona"]
+        end
+        
+        T1 --> SHUFFLE
+        T2 --> SHUFFLE
+        T3 --> SHUFFLE
+        
+        SHUFFLE --> T4
+        SHUFFLE --> T5
+    end
+
+    classDef stage fill:#1e293b,stroke:#475569,color:#ffffff,stroke-width:1px
+    classDef task fill:#15803d,stroke:#4ade80,color:#ffffff,stroke-width:2px
+    classDef shuf fill:#c2410c,stroke:#fb923c,color:#ffffff,stroke-width:2px
+
+    class T1,T2,T3,T4,T5 task
+    class SHUFFLE shuf
+</pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     5. PARTICIONES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>5. Particiones: El fragmento de datos</h2>
+
+<p>Si un Task es "procesar un trocito de datos", ¿qué es exactamente ese trocito? Es una <strong>Partición</strong>.</p>
+<p>Una partición es una colección de filas de tu dataset que reside íntegramente en la memoria RAM de un único Executor. Spark, al leer un archivo de 10GB, no crea un objeto de 10GB; lo parte por la mitad repetidas veces hasta tener, por ejemplo, 100 fragmentos de 100MB. Cada fragmento es una partición.</p>
+
+<p><strong>La regla de oro de la concurrencia en Spark:</strong><br/>
+1 Partición = 1 Task = 1 Core de CPU ocupado.</p>
+
+<p>Por eso, controlar el número de particiones es vital:</p>
+<ul>
+    <li>Si lees un archivo pequeño y creas 10.000 particiones, generarás 10.000 Tasks. Spark tardará más tiempo en organizar, enviar y coordinar las tareas (el temido <em>overhead</em> de red) que en el cálculo en sí.</li>
+    <li>Si lees un archivo inmenso y tiene solo 2 particiones, Spark solo creará 2 Tasks. Si tienes un cluster potentísimo de 100 cores, 98 cores se quedarán mirando la pared, de brazos cruzados.</li>
+</ul>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — inspeccionar y controlar particiones</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("demo").getOrCreate()
+df = spark.read.csv("datos.csv", header=True)
+
+# ── ¿En cuántas particiones está dividido mi DataFrame?
+print(df.rdd.getNumPartitions())   # p.ej. devolverá 8
+
+# ── FORZAR AUMENTO: Útil para paralelizar antes de operaciones pesadas.
+# Añade Shuffle (tiene que mover filas por la red para cuadrar los nuevos tamaños)
+df_rep = df.repartition(32)
+
+# ── FORZAR REDUCCIÓN: Útil si has filtrado mucho y han quedado particiones vacías.
+# NO causa Shuffle. Simplemente junta particiones vecinas dentro del mismo Executor.
+df_coal = df.coalesce(2)</code></pre>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        <strong>¿Cuántas particiones debo tener?</strong> La recomendación de la industria es apuntar a entre <strong>2 y 4 particiones por cada Core total que tenga tu cluster</strong>. Por ejemplo, si tu cluster tiene 20 cores, deberías tener entre 40 y 80 particiones. Esto asegura que todos los cores trabajen continuamente y previene que una máquina rápida se quede sin trabajo si acaba antes que el resto.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     6. MODOS DE DESPLIEGUE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>6. Modos de despliegue</h2>
+
+<p>Una de las magias de Spark es que el mismo código Python que escribes en tu portátil funciona en un superordenador. Lo único que cambia es a quién llamas como <em>Cluster Manager</em> cuando configuras la sesión.</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Modo</th><th>Qué es</th><th>Dónde corre</th><th>Cuándo usarlo</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><code>local[*]</code></td>
+                <td>Un simulacro. Driver y Executors corren en el mismo proceso de tu máquina, usando todos tus cores. No hay red real.</td>
+                <td>Tu portátil</td>
+                <td>Desarrollo, tests, <strong>este curso</strong></td>
+            </tr>
+            <tr>
+                <td><strong>Standalone</strong></td>
+                <td>El gestor incluido nativamente en Spark. Levantas un <code>master</code> y varios <code>workers</code>. Sin dependencias de terceros. Es lo que usaremos en Docker.</td>
+                <td>Tus servidores / Docker</td>
+                <td>On-premise sencillo, laboratorios</td>
+            </tr>
+            <tr>
+                <td><strong>YARN</strong></td>
+                <td>El sistema de gestión de recursos de Hadoop. Si una empresa ya tiene un Data Lake clásico, Spark usa YARN para pedir máquinas.</td>
+                <td>Cluster Hadoop</td>
+                <td>Empresas con infraestructura tradicional Big Data</td>
+            </tr>
+            <tr>
+                <td><strong>Kubernetes (K8s)</strong></td>
+                <td>Spark lanza los Executors dinámicamente como contenedores en un cluster de Kubernetes. Soporta auto-escalado extremo.</td>
+                <td>Nube (EKS, GKE) o On-prem</td>
+                <td>Plataformas de datos modernas, DataOps</td>
+            </tr>
+            <tr>
+                <td><strong>Databricks / AWS EMR</strong></td>
+                <td>Soluciones de nube que administran todo por ti. Tú pagas por hora y ellos se aseguran de que el cluster encienda, escale y apague.</td>
+                <td>AWS, Azure, GCP</td>
+                <td>Producción directa y equipos que no quieren lidiar con infraestructura</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<p>En este curso usaremos <strong>Standalone en Docker</strong>. Nos dará la experiencia completa de un cluster distribuido (red real, procesos separados) pero sin salir de tu propia máquina.</p>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     7. ENTORNO DOCKER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>7. Entorno con Docker Compose</h2>
+
+<h3>7.1 docker-compose.yml</h3>
+<p>Usaremos la imagen oficial de Bitnami para levantar 1 Master y 2 Workers de forma muy sencilla.</p>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">yaml — docker-compose.yml</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>version: "3.8"
+
+services:
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "8080:8080"   # UI del Master
+      - "7077:7077"   # Puerto interno de comunicación
+    volumes:
+      - ./jobs:/opt/bitnami/spark/jobs
+      - ./data:/opt/bitnami/spark/data
+
+  spark-worker-1:
+    image: bitnami/spark:3.5
+    container_name: spark-worker-1
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8081:8081"   # UI del Worker
+    volumes:
+      - ./jobs:/opt/bitnami/spark/jobs
+      - ./data:/opt/bitnami/spark/data
+
+  spark-worker-2:
+    image: bitnami/spark:3.5
+    container_name: spark-worker-2
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./jobs:/opt/bitnami/spark/jobs
+      - ./data:/opt/bitnami/spark/data</code></pre>
+</div>
+
+<h3>7.2 Levantar el cluster</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Crear la estructura que montaremos en los contenedores
+mkdir -p spark-lab/{jobs,data}
+cd spark-lab
+
+# Levantar el cluster (en background)
+docker compose up -d
+
+# Puedes acceder a la UI gráfica abriendo en el navegador:
+# http://localhost:8080</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     8. PRIMERA SESIÓN PYSPARK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>8. Primera sesión PySpark</h2>
+
+<p>Para crear nuestro primer script, necesitamos la herramienta inicial de Python. Desde Spark 2.0 en adelante, esa herramienta central es <code>SparkSession</code> (reemplaza al antiguo SparkContext que verás en tutoriales pre-2016).</p>
+
+<h3>8.1 Script inicial (jobs/hola_spark.py)</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from pyspark.sql import SparkSession
+
+# 1. CONSTRUCCIÓN DE LA SESIÓN (Nuestro Driver)
+spark = (SparkSession.builder
+         .appName("MiPrimerJob")        # Nombre visible en la interfaz web
+         .master("local[*]")            # 'local[*]' significa modo simulacro en todos tus cores
+         .getOrCreate())
+
+# 2. CREACIÓN DE DATOS
+datos = [
+    ("Alice", "Ventas", 4000),
+    ("Bob", "Marketing", 3000),
+    ("Clara", "Ventas", 4500)
+]
+columnas = ["nombre", "departamento", "salario"]
+df = spark.createDataFrame(datos, columnas)
+
+# 3. TRANSFORMACIONES (Lazy)
+# Creamos el plan de ejecución pero no procesa nada todavía
+ventas = df.filter(df.departamento == "Ventas")
+promedio = ventas.groupBy("departamento").agg({"salario": "avg"})
+
+# 4. ACCIÓN (Dispara todo el proceso)
+promedio.show()
+
+# 5. CERRAR SESIÓN
+spark.stop()</code></pre>
+</div>
+
+<h3>8.2 Ejecutarlo contra el cluster Docker</h3>
+<p>Si quieres que este script se ejecute de verdad de forma distribuida en los Workers de tu Docker, en vez de usar <code>local[*]</code>, usaremos el comando de terminal <code>spark-submit</code> para enviar el archivo al Master:</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">bash — Enviar el job</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>docker exec spark-master spark-submit \
+  --master spark://spark-master:7077 \
+  --executor-memory 1g \
+  /opt/bitnami/spark/jobs/hola_spark.py</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     9. LA INTERFAZ SPARK UI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>9. Spark UI: Ver dentro de la máquina</h2>
+
+<p>Cuando un Driver está en ejecución (mientras tu script Python no termine), Spark levanta automáticamente una página web en el puerto <code>4040</code> de esa máquina. Es la <strong>Spark UI</strong>, la herramienta de depuración por excelencia del ingeniero de datos.</p>
+<p>Accesible en: <code>http://localhost:4040</code></p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Pestaña</th><th>Qué vas a ver dentro</th><th>Su utilidad principal</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Jobs</strong></td><td>Una lista de todas las Acciones que ha disparado tu código.</td><td>Ver cuánto ha tardado en total tu <code>count()</code> o <code>write()</code>.</td></tr>
+            <tr><td><strong>Stages</strong></td><td>Las fases (rotas por los Shuffles) dentro de un Job específico.</td><td>Localizar el cuello de botella. ¿Es la lectura o la agrupación lo lento?</td></tr>
+            <tr><td><strong>Tasks</strong></td><td>Los cientos de tareas pequeñas de un Stage.</td><td>Detectar <em>Skew</em> (datos ladeados). Si 99 tasks tardan 1 segundo y 1 task tarda 10 minutos, un Executor ha recibido demasiada carga.</td></tr>
+            <tr><td><strong>Executors</strong></td><td>Uso de CPU y RAM, separado para cada Worker.</td><td>Saber si algún nodo está al borde del colapso de memoria (OOM).</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="index.html" class="btn btn-outline">← Inicio</a>
+    <a href="m2-funcional.html" class="btn btn-primary">M2: Programación Funcional →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    // ── Mermaid init ──
+    mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        themeVariables: {
+            darkMode: true,
+            background: '#0a1628',
+            primaryColor: '#1d4ed8',
+            primaryTextColor: '#ffffff',
+            primaryBorderColor: '#93c5fd',
+            lineColor: '#60a5fa',
+            secondaryColor: '#7c3aed',
+            tertiaryColor: '#15803d',
+            noteBkgColor: '#1e293b',
+            noteTextColor: '#e2e8f0',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: '14px',
+            nodeBorder: '#93c5fd',
+            clusterBkg: '#1e293b',
+            clusterBorder: '#475569',
+            edgeLabelBackground: '#1e293b',
+            mainBkg: '#1d4ed8',
+            textColor: '#ffffff'
+        },
+        flowchart: { curve: 'basis', padding: 20, htmlLabels: true }
+    });
+
+    // ── Navbar ──
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+
+    // ── Copy code ──
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+
+    // ── Lightbox para diagramas ──
+    let _openDiagramEl = null;
+    function openDiagram(el) {
+        const container = (typeof el === 'string')
+            ? document.getElementById(el)?.closest('.diagram-container')
+            : el.closest('.diagram-container') || el;
+        if (!container) return;
+        _openDiagramEl = container;
+        container.classList.add('lightbox-open');
+        document.getElementById('lightbox-close').classList.add('visible');
+        document.body.style.overflow = 'hidden';
+    }
+    function closeDiagram() {
+        if (_openDiagramEl) { _openDiagramEl.classList.remove('lightbox-open'); _openDiagramEl = null; }
+        document.getElementById('lightbox-close').classList.remove('visible');
+        document.body.style.overflow = '';
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDiagram(); });
+    document.addEventListener('click', e => { if (_openDiagramEl && e.target === _openDiagramEl) closeDiagram(); });
+</script>
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

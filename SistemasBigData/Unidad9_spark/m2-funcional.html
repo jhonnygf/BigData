@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M2: Programación Funcional | Spark Raw</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+    <style>
+        /* ── Ejercicios con solución colapsable ─────────────── */
+        .ejercicio-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+            background: var(--surface);
+        }
+        .ejercicio-card .ejercicio-enunciado {
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+        }
+        .ejercicio-card .ejercicio-num {
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: var(--accent);
+            min-width: 2.2rem;
+        }
+        .ejercicio-card .ejercicio-texto strong {
+            color: var(--text1);
+        }
+        .ejercicio-card .ejercicio-texto code {
+            background: rgba(99,179,237,.12);
+            padding: .1em .4em;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .85em;
+        }
+        .ejercicio-card details {
+            border-top: 1px solid var(--border);
+        }
+        .ejercicio-card details summary {
+            cursor: pointer;
+            padding: .85rem 1.5rem;
+            font-size: .85rem;
+            font-weight: 600;
+            color: var(--accent);
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+            user-select: none;
+            transition: background .2s;
+        }
+        .ejercicio-card details summary:hover {
+            background: rgba(99,179,237,.06);
+        }
+        .ejercicio-card details summary::before {
+            content: '▶';
+            font-size: .7rem;
+            transition: transform .2s;
+        }
+        .ejercicio-card details[open] summary::before {
+            transform: rotate(90deg);
+        }
+        .ejercicio-card details .solucion-body {
+            padding: 0 1.5rem 1.25rem;
+        }
+        .ejercicio-card details .solucion-body .code-block {
+            margin-top: .75rem;
+            margin-bottom: 0;
+        }
+    </style>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<header class="page-hero">
+    <span class="page-hero-icon">λ</span>
+    <h1>M2 — <span class="gradient-text">Programación Funcional</span></h1>
+    <p>El paradigma que subyace a Spark. Antes de tocar un DataFrame, necesitas entender cómo pensar en funcional: datos inmutables, transformaciones puras y composición.</p>
+</header>
+
+<main class="content">
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     1. ¿QUÉ ES LA PROGRAMACIÓN FUNCIONAL?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>1. ¿Qué es la programación funcional?</h2>
+
+<p>La Programación Funcional (FP) trata los programas como <strong>evaluaciones de funciones matemáticas</strong>. El estado mutable y los efectos secundarios son el enemigo. Spark se basa en este paradigma porque en un cluster distribuido, el estado compartido mutable es imposible de coordinar eficientemente.</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Paradigma imperativo</th><th>Paradigma funcional</th></tr></thead>
+        <tbody>
+            <tr><td>"Haz <em>esto</em>, luego <em>aquello</em>, luego <em>lo otro</em>"</td><td>"El resultado es <em>f(g(datos))</em>"</td></tr>
+            <tr><td>Variables que cambian de valor</td><td>Valores inmutables (bindings)</td></tr>
+            <tr><td>Bucles <code>for</code>/<code>while</code> con acumuladores</td><td><code>map</code>, <code>filter</code>, <code>reduce</code></td></tr>
+            <tr><td>Funciones con efectos secundarios (I/O, logs, BD)</td><td>Funciones puras — misma entrada = misma salida siempre</td></tr>
+            <tr><td>El orden de ejecución importa</td><td>Las transformaciones pueden reordenarse y paralelizarse</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     2. FUNCIONES PURAS E INMUTABILIDAD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>2. Funciones puras e inmutabilidad</h2>
+
+<h3>2.1 Función pura: sin efectos secundarios</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># ❌ Función IMPURA: modifica estado externo
+total = 0
+def acumular_impuro(x):
+    global total
+    total += x      # efecto secundario: modifica variable global
+    return total
+
+# ✅ Función PURA: sin estado externo, sin efectos secundarios
+def sumar_puro(acumulado, x):
+    return acumulado + x   # mismo input → siempre mismo output
+
+# Las funciones puras son predecibles, testables y paralelizables
+print(sumar_puro(10, 5))   # siempre 15
+print(sumar_puro(10, 5))   # siempre 15 — nunca sorpresas</code></pre>
+</div>
+
+<h3>2.2 Inmutabilidad: no modificar lo que ya existe</h3>
+
+<p>La inmutabilidad es el principio de que, una vez creado un dato, <em>no se modifica</em> — en su lugar se crea uno nuevo. Esto elimina toda una clase de bugs (efectos secundarios inesperados entre funciones) y es la base del fault-tolerance de Spark.</p>
+
+<h4>¿Python da cobertura a esto?</h4>
+
+<p>La respuesta corta es: <strong>parcialmente, y por convención más que por imposición del compilador</strong>. Python es multiparadigma — te deja hacer lo que quieras. Scala, en cambio, fue diseñado desde cero con la programación funcional en mente y tiene mecanismos más fuertes:</p>
+
+<div class="table-wrapper">
+    <table>
+        <thead>
+            <tr><th>Concepto</th><th>Scala (diseñado para FP)</th><th>Python (multiparadigma)</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Variable inmutable</td>
+                <td><code>val x = 5</code> — el compilador <strong>prohíbe</strong> reasignar <code>x</code></td>
+                <td>No existe. Solo convención: nombres en <code>UPPER_CASE</code> o <code>Final</code> de typing (no validado en runtime)</td>
+            </tr>
+            <tr>
+                <td>Variable mutable</td>
+                <td><code>var x = 5</code> — explícitamente mutable</td>
+                <td>Todo es mutable por defecto</td>
+            </tr>
+            <tr>
+                <td>Lista inmutable</td>
+                <td><code>List(1,2,3)</code> — inmutable por defecto. <code>ListBuffer</code> si quieres mutable</td>
+                <td><code>tuple</code> o <code>frozenset</code>. La <code>list</code> es mutable por defecto</td>
+            </tr>
+            <tr>
+                <td>Objeto inmutable</td>
+                <td><code>case class</code> — todos los campos son <code>val</code> por defecto, <code>.copy()</code> gratis</td>
+                <td><code>@dataclass(frozen=True)</code> o <code>NamedTuple</code> — aproximación funcional</td>
+            </tr>
+            <tr>
+                <td>Verificación compilador</td>
+                <td>✅ El compilador rechaza mutación de <code>val</code></td>
+                <td>❌ Solo herramientas de análisis estático (mypy, pyright) con <code>Final</code></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<h4>Lo que Python sí ofrece nativamente</h4>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — tipos inmutables integrados en el lenguaje</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># ── 1. Tipos primitivos: siempre inmutables ────────────────────────
+# int, float, str, bool, bytes — Python nunca los muta in-place
+x = "hola"
+y = x.upper()   # crea un string NUEVO, x sigue siendo "hola"
+print(x)        # "hola"  ← sin cambios
+print(y)        # "HOLA"
+
+# ── 2. tuple — secuencia inmutable ────────────────────────────────
+coordenadas = (40.416, -3.703)
+# coordenadas[0] = 41.0  → TypeError: 'tuple' object does not support item assignment
+nueva_coord = (41.0, coordenadas[1])   # creas una nueva tupla
+
+# ── 3. frozenset — conjunto inmutable ─────────────────────────────
+etiquetas = frozenset({"spark", "python", "bigdata"})
+# etiquetas.add("scala")  → AttributeError: 'frozenset' object has no attribute 'add'
+nuevas = etiquetas | {"scala"}   # crea un frozenset NUEVO
+
+# ── 4. str — siempre immutable (a diferencia de Java StringBuilder)
+s = "spark"
+# s[0] = "S"  → TypeError
+s2 = "S" + s[1:]    # nuevo string</code></pre>
+</div>
+
+<h4>Patrones para inmutabilidad en tus propias clases</h4>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — dataclass frozen y NamedTuple</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code">from dataclasses import dataclass
+from typing import NamedTuple, Final
+
+# ── Opción A: dataclass frozen=True ───────────────────────────────
+# frozen=True genera __setattr__ y __delattr__ que lanzan FrozenInstanceError
+@dataclass(frozen=True)
+class Sensor:
+    sensor_id: str
+    caudal:    float
+    presion:   float
+
+s1 = Sensor("sensor-01", 18.4, 2.7)
+# s1.caudal = 99.0   → FrozenInstanceError: cannot assign to field 'caudal'
+
+# "Modificar" = crear un nuevo objeto (similar a .copy() de Scala case class)
+s2 = dataclass.replace(s1, caudal=22.0)   # nuevo objeto, s1 intacto
+print(s1.caudal)   # 18.4
+print(s2.caudal)   # 22.0
+
+# ── Opción B: NamedTuple — más ligera, también hasheable ──────────
+class Punto(NamedTuple):
+    x: float
+    y: float
+
+p1 = Punto(1.0, 2.0)
+# p1.x = 9   → AttributeError
+p2 = p1._replace(x=5.0)   # nuevo objeto
+
+# ── Opción C: Final — señal para el analizador estático ───────────
+# No impone inmutabilidad en runtime, pero mypy/pyright la detectan
+MAX_WORKERS: Final = 8
+# MAX_WORKERS = 16   → mypy: Cannot assign to final name "MAX_WORKERS"
+</code></pre>
+</div>
+
+<h4>¿Y las listas? El patrón inmutable vs mutable</h4>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python — la list es mutable, tuple es inmutable</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># ❌ Estilo mutable: modifica in-place → efectos secundarios
+salarios = [42000, 35000, 48000]
+
+def aplicar_aumento(lista):
+    for i in range(len(lista)):
+        lista[i] *= 1.1   # ← MUTA la lista original (efecto secundario)
+
+aplicar_aumento(salarios)
+print(salarios)   # [46200, 38500, 52800] ← la función alteró el dato externo
+
+# ✅ Estilo inmutable: siempre crea una colección nueva
+salarios = [42000, 35000, 48000]
+
+def con_aumento(lista):
+    return [s * 1.1 for s in lista]   # ← nueva lista, la original intacta
+
+salarios_nuevos = con_aumento(salarios)
+print(salarios)       # [42000, 35000, 48000]  ← sin cambios
+print(salarios_nuevos)  # [46200.0, 38500.0, 52800.0]
+
+# En Spark esto es automático:
+# df2 = df.withColumn("salario", df.salario * 1.1)
+# df nunca cambia — df2 es un nuevo plan de ejecución</code></pre>
+</div>
+
+<h4>Resumen: Python vs Scala para programación funcional</h4>
+
+<div class="info-box warning">
+    <div class="info-box-icon">⚖️</div>
+    <div class="info-box-text">
+        <strong>Python no te protege del compilador</strong> — puedes ignorar todos estos patrones y mutar datos libremente. Scala te <em>obliga</em> (con <code>val</code>) o al menos lo hace explícito (con <code>var</code>). En Python la inmutabilidad es una <strong>disciplina de escritura</strong>, no una garantía del lenguaje. Por eso en equipos grandes se usan linters y type checking (<code>mypy</code>) para reforzarla.<br><br>
+        La buena noticia: <strong>Spark no depende de que Python sea funcional</strong>. Los DataFrames son inmutables a nivel de motor (JVM), independientemente de lo que hagas en el lado Python.
+    </div>
+</div>
+
+<div class="info-box info">
+    <div class="info-box-icon">ℹ️</div>
+    <div class="info-box-text">
+        <strong>¿Por qué importa en Spark?</strong> Los RDDs y DataFrames son <em>inmutables</em> por diseño de motor. Cuando haces <code>df2 = df.filter(...)</code>, <code>df</code> nunca cambia — <code>df2</code> es un nuevo plan. Esto permite al scheduler re-ejecutar cualquier partición perdida (fault tolerance) sin riesgo de que el reintento produzca un resultado diferente.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     3. MAP, FILTER, REDUCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>3. Las tres operaciones fundamentales: map, filter, reduce</h2>
+
+<p>Estas tres funciones de orden superior son la base de <em>todo</em> procesamiento de datos en Spark. Entenderlas en Python puro hace que la API de Spark sea obvia.</p>
+
+<h3>3.1 map — transformar cada elemento</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>empleados = [
+    {"nombre": "Alice", "salario": 42000, "dpto": "Ingeniería"},
+    {"nombre": "Bob",   "salario": 35000, "dpto": "Marketing"},
+    {"nombre": "Clara", "salario": 48000, "dpto": "Ingeniería"},
+]
+
+# map aplica una función a CADA elemento y devuelve un iterable nuevo
+# No modifica la lista original
+
+# Extraer solo nombres
+nombres = list(map(lambda e: e["nombre"], empleados))
+print(nombres)   # ['Alice', 'Bob', 'Clara']
+
+# Aplicar aumento del 10%
+con_aumento = list(map(lambda e: {**e, "salario": e["salario"] * 1.1}, empleados))
+print(con_aumento[0])  # {'nombre': 'Alice', 'salario': 46200.0, 'dpto': 'Ingeniería'}
+
+# Equivalente con comprehension (más idiomático en Python)
+nombres_comp = [e["nombre"] for e in empleados]
+
+# En Spark esto es:  df.select("nombre")
+# map sobre RDD:     rdd.map(lambda e: e["nombre"])</code></pre>
+</div>
+
+<h3>3.2 filter — seleccionar elementos que cumplen una condición</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># filter aplica un predicado y devuelve solo los True
+ingenieria = list(filter(lambda e: e["dpto"] == "Ingeniería", empleados))
+print(len(ingenieria))  # 2
+
+# Encadenar: filtrar + transformar (composición)
+salarios_ing = list(map(
+    lambda e: e["salario"],
+    filter(lambda e: e["dpto"] == "Ingeniería", empleados)
+))
+print(salarios_ing)  # [42000, 48000]
+
+# Equivalente con comprehension
+salarios_ing_comp = [e["salario"] for e in empleados if e["dpto"] == "Ingeniería"]
+
+# En Spark esto es:  df.filter(df.dpto == "Ingeniería").select("salario")</code></pre>
+</div>
+
+<h3>3.3 reduce — colapsar una colección a un valor</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from functools import reduce
+
+salarios = [42000, 35000, 48000, 39000, 51000]
+
+# reduce(función, iterable, valor_inicial)
+# función recibe (acumulado, elemento_actual) → nuevo_acumulado
+total = reduce(lambda acc, x: acc + x, salarios, 0)
+print(total)   # 215000
+
+maximo = reduce(lambda acc, x: x if x > acc else acc, salarios)
+print(maximo)  # 51000
+
+# En Spark:
+# rdd.reduce(lambda a, b: a + b)
+# df.agg({"salario": "sum"})
+# df.agg(F.sum("salario"))
+
+# Visualizando el proceso de reduce:
+# acc=0,     x=42000 → acc=42000
+# acc=42000, x=35000 → acc=77000
+# acc=77000, x=48000 → acc=125000 ... etc.</code></pre>
+</div>
+
+<h3>3.4 Encadenamiento: el pipeline funcional</h3>
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Problema: salario medio del departamento de Ingeniería con aumento del 5%
+
+# Estilo imperativo (difícil de paralelizar)
+ing_salarios = []
+for e in empleados:
+    if e["dpto"] == "Ingeniería":
+        ing_salarios.append(e["salario"] * 1.05)
+media = sum(ing_salarios) / len(ing_salarios)
+
+# Estilo funcional (composición de transformaciones puras)
+ing_salarios_f = list(map(
+    lambda s: s * 1.05,
+    map(lambda e: e["salario"],
+        filter(lambda e: e["dpto"] == "Ingeniería", empleados))
+))
+media_f = reduce(lambda a, b: a + b, ing_salarios_f) / len(ing_salarios_f)
+
+# En Spark, este mismo pipeline se escribe:
+# (df
+#   .filter(col("dpto") == "Ingeniería")
+#   .withColumn("salario_proyectado", col("salario") * 1.05)
+#   .agg(avg("salario_proyectado"))
+# )</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     4. LAMBDAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>4. Funciones lambda</h2>
+
+<p>Una <strong>lambda</strong> es una función anónima de una expresión. En Python: <code>lambda parámetros: expresión</code>. Son la forma natural de pasar funciones a <code>map</code>, <code>filter</code>, <code>reduce</code> y a las API de Spark.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Lambda básica
+cuadrado = lambda x: x ** 2
+print(cuadrado(5))   # 25
+
+# Lambda con múltiples parámetros
+suma = lambda a, b: a + b
+print(suma(3, 4))    # 7
+
+# Lambda con condición (ternario)
+clasificar = lambda s: "alto" if s >= 45000 else "bajo"
+print(clasificar(42000))   # "bajo"
+print(clasificar(51000))   # "alto"
+
+# ⚠️ Límite: lambdas solo pueden tener UNA expresión
+# Para lógica compleja, usa def — Spark acepta ambos igual
+def procesar_empleado(e):
+    dpto = e["dpto"].upper()
+    salario_neto = e["salario"] * 0.78  # 22% IRPF aprox.
+    return {**e, "dpto_norm": dpto, "salario_neto": round(salario_neto, 2)}
+
+procesados = list(map(procesar_empleado, empleados))
+
+# Diferencia lambdas vs def con Spark UDFs
+from pyspark.sql.functions import udf
+from pyspark.sql.types import DoubleType
+
+# Ambas formas son válidas para registrar como UDF
+calcular_neto_lambda = udf(lambda s: round(s * 0.78, 2), DoubleType())
+calcular_neto_def    = udf(procesar_empleado, DoubleType())  # si devolviera solo float</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     5. FUNCIONES DE ORDEN SUPERIOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>5. Funciones de orden superior</h2>
+<p>Una función que recibe otras funciones como argumento, o que devuelve una función, se llama <strong>función de orden superior</strong>. <code>map</code>, <code>filter</code> y <code>reduce</code> son ejemplos. Pero puedes crearlas tú mismo.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Función que devuelve una función: "fábrica de funciones"
+def crear_filtro_dpto(dpto_objetivo):
+    """Devuelve un predicado que filtra por departamento."""
+    return lambda empleado: empleado["dpto"] == dpto_objetivo
+
+# Crear predicados especializados
+es_ingenieria = crear_filtro_dpto("Ingeniería")
+es_marketing  = crear_filtro_dpto("Marketing")
+
+print(es_ingenieria({"dpto": "Ingeniería"}))  # True
+print(es_marketing({"dpto": "Ingeniería"}))   # False
+
+ingenieria = list(filter(es_ingenieria, empleados))
+
+# Función que recibe otra función como argumento
+def aplicar_a_salarios(empleados, transformacion):
+    return [transformacion(e["salario"]) for e in empleados]
+
+bonos = aplicar_a_salarios(empleados, lambda s: s * 0.1)
+print(bonos)  # [4200.0, 3500.0, 4800.0]
+
+# Patrón muy común en Spark: pasar funciones a .transform()
+def normalizar_columnas(df):
+    """Transforma un DataFrame: normaliza nombres de columnas."""
+    from pyspark.sql import functions as F
+    return df.select([F.col(c).alias(c.lower().replace(" ", "_"))
+                      for c in df.columns])
+
+# df_limpio = df.transform(normalizar_columnas)</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     6. CLOSURES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>6. Closures: funciones que "recuerdan" su contexto</h2>
+<p>Un <strong>closure</strong> es una función que captura variables de su entorno de definición. Es la base de las "fábricas de funciones". En Spark, esto tiene una trampa importante.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Closure simple
+def multiplicador(factor):
+    def multiplicar(x):
+        return x * factor   # factor es capturado del entorno exterior
+    return multiplicar
+
+doble  = multiplicador(2)
+triple = multiplicador(3)
+
+print(doble(5))   # 10
+print(triple(5))  # 15
+
+# Trampas de closures en bucles (¡error clásico!)
+funciones_mal = [lambda x: x * i for i in range(3)]
+# Todas capturan la misma variable i (su valor final = 2)
+print([f(10) for f in funciones_mal])  # [20, 20, 20] ← ¡mal!
+
+# Solución: capturar el valor actual con argumento por defecto
+funciones_bien = [lambda x, i=i: x * i for i in range(3)]
+print([f(10) for f in funciones_bien])  # [0, 10, 20] ← correcto</code></pre>
+</div>
+
+<div class="info-box warning">
+    <div class="info-box-icon">⚠️</div>
+    <div class="info-box-text">
+        <strong>Closures en Spark:</strong> cuando una función lambda o <code>def</code> que pasas a Spark captura variables del Driver, esas variables se <strong>serializan y envían a cada Executor</strong>. Si la variable es enorme (un modelo ML, un diccionario de millones de entradas), esto es un cuello de botella. Usa <strong>Broadcast variables</strong> para datos grandes compartidos.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     7. COMPOSICIÓN DE FUNCIONES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>7. Composición de funciones</h2>
+<p>Componer funciones significa aplicar varias en secuencia. <code>h = f ∘ g</code> significa "aplica g, luego aplica f al resultado". En Spark, cada transformación del DataFrame es una operación de composición.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code>from functools import reduce as fred
+
+# Definir operaciones como funciones puras
+def normalizar_nombre(e): return {**e, "nombre": e["nombre"].strip().title()}
+def calcular_neto(e):     return {**e, "neto": round(e["salario"] * 0.78, 2)}
+def categorizar(e):       return {**e, "nivel": "senior" if e["salario"] > 45000 else "junior"}
+
+# Componer: aplicar las tres en secuencia
+pipeline = [normalizar_nombre, calcular_neto, categorizar]
+
+def aplicar_pipeline(empleado, pipeline):
+    return fred(lambda e, f: f(e), pipeline, empleado)
+
+procesado = aplicar_pipeline(
+    {"nombre": " alice ", "salario": 42000, "dpto": "Ingeniería"},
+    pipeline
+)
+print(procesado)
+# {'nombre': 'Alice', 'salario': 42000, 'dpto': 'Ingeniería', 'neto': 32760.0, 'nivel': 'junior'}
+
+# En Spark, el mismo concepto usando .transform()
+def step1_normalizar(df):
+    from pyspark.sql.functions import initcap, trim
+    return df.withColumn("nombre", initcap(trim(df.nombre)))
+
+def step2_calcular_neto(df):
+    from pyspark.sql.functions import round as spark_round
+    return df.withColumn("neto", spark_round(df.salario * 0.78, 2))
+
+def step3_categorizar(df):
+    from pyspark.sql.functions import when
+    return df.withColumn("nivel",
+        when(df.salario > 45000, "senior").otherwise("junior"))
+
+# Aplicar pipeline sobre un DataFrame — limpio y refactorizable
+# resultado = df.transform(step1_normalizar).transform(step2_calcular_neto).transform(step3_categorizar)</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     8. RECURSIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>8. Recursión</h2>
+<p>En FP pura, la recursión sustituye a los bucles. Python tiene límite de recursión (~1000 niveles), por lo que en práctica se usan <code>map/filter/reduce</code> o comprehensions. Pero entender la recursión ayuda a comprender cómo Spark divide el trabajo.</p>
+
+<div class="code-block">
+    <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+    <pre><code># Implementar reduce con recursión (pedagogía)
+def mi_reduce(funcion, lista, inicial=None):
+    if not lista:
+        return inicial
+    if inicial is None:
+        return mi_reduce(funcion, lista[1:], lista[0])
+    return mi_reduce(funcion, lista[1:], funcion(inicial, lista[0]))
+
+print(mi_reduce(lambda a, b: a + b, [1, 2, 3, 4, 5]))  # 15
+
+# Flatten recursivo de listas anidadas
+def aplanar(lista):
+    if not lista:
+        return []
+    cab, *resto = lista
+    if isinstance(cab, list):
+        return aplanar(cab) + aplanar(resto)
+    return [cab] + aplanar(resto)
+
+print(aplanar([1, [2, 3], [4, [5, 6]]]))  # [1, 2, 3, 4, 5, 6]
+# En Spark: df.select(explode("columna_array"))</code></pre>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     9. RESUMEN: FP → SPARK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>9. Del concepto funcional a la API de Spark</h2>
+
+<div class="table-wrapper">
+    <table>
+        <thead><tr><th>Concepto FP (Python puro)</th><th>Equivalente en PySpark</th></tr></thead>
+        <tbody>
+            <tr><td><code>map(f, lista)</code></td><td><code>df.select(f(col))</code> o <code>df.withColumn(...)</code> o <code>rdd.map(f)</code></td></tr>
+            <tr><td><code>filter(pred, lista)</code></td><td><code>df.filter(pred)</code> o <code>df.where(pred)</code> o <code>rdd.filter(pred)</code></td></tr>
+            <tr><td><code>reduce(f, lista)</code></td><td><code>df.agg(...)</code> o <code>rdd.reduce(f)</code></td></tr>
+            <tr><td>Función de orden superior</td><td><code>df.transform(mi_funcion)</code></td></tr>
+            <tr><td>Composición de funciones</td><td>Encadenamiento de transformaciones</td></tr>
+            <tr><td>Inmutabilidad</td><td>Cada transformación devuelve un nuevo DataFrame</td></tr>
+            <tr><td>Función pura</td><td>UDF sin efectos secundarios ni estado externo</td></tr>
+            <tr><td>Closure con variable grande</td><td>Broadcast variable (<code>sc.broadcast(mi_dict)</code>)</td></tr>
+            <tr><td>Lazy evaluation</td><td>Transformaciones vs Acciones en Spark</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="info-box tip">
+    <div class="info-box-icon">💡</div>
+    <div class="info-box-text">
+        <strong>La razón real por la que Spark puede distribuir el trabajo:</strong> las transformaciones son funciones puras sobre datos inmutables. El scheduler puede enviar <code>lambda x: x * 1.1</code> a cualquier executor y saber que producirá el mismo resultado independientemente del nodo. Si un nodo falla, simplemente re-ejecuta la función sobre la misma partición.
+    </div>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     10. EJERCICIOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<h2>10. Ejercicios</h2>
+<p style="color:var(--text2);margin-bottom:1.5rem">Pincha en <strong>"Ver solución"</strong> para desplegar la respuesta de cada ejercicio.</p>
+
+<!-- E1 -->
+<div class="ejercicio-card">
+    <div class="ejercicio-enunciado">
+        <span class="ejercicio-num">E1</span>
+        <div class="ejercicio-texto">
+            Dado el listado de empleados, calcula en <strong>una sola expresión</strong> (sin variables intermedias, sin bucles) el salario <strong>promedio</strong> de los empleados con salario mayor a 40.000 €.<br>
+            Usa solo <code>filter</code>, <code>map</code>, <code>reduce</code> y operadores aritméticos.
+        </div>
+    </div>
+    <details>
+        <summary>▸ Ver solución</summary>
+        <div class="solucion-body">
+            <div class="code-block">
+                <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+                <pre><code>from functools import reduce
+
+empleados = [
+    {"nombre": "Ana",   "salario": 42000},
+    {"nombre": "Luis",  "salario": 35000},
+    {"nombre": "María", "salario": 51000},
+    {"nombre": "Pedro", "salario": 39000},
+    {"nombre": "Laura", "salario": 48000},
+]
+
+# Una sola expresión: filter → map → reduce para suma, dividir entre count
+filtrados = list(filter(lambda e: e["salario"] > 40_000, empleados))
+
+promedio = (
+    reduce(lambda acc, s: acc + s,
+           map(lambda e: e["salario"], filtrados))
+    / len(filtrados)
+)
+
+print(promedio)   # 47000.0
+
+# ── Versión REALMENTE sin variables intermedias (una expr) ────────
+promedio2 = (
+    lambda emp: (
+        reduce(lambda a, s: a + s, map(lambda e: e["salario"], emp)) / len(emp)
+    )
+)(list(filter(lambda e: e["salario"] > 40_000, empleados)))
+
+print(promedio2)  # 47000.0</code></pre>
+            </div>
+        </div>
+    </details>
+</div>
+
+<!-- E2 -->
+<div class="ejercicio-card">
+    <div class="ejercicio-enunciado">
+        <span class="ejercicio-num">E2</span>
+        <div class="ejercicio-texto">
+            Crea una fábrica de funciones <code>crear_transformador_salario(porcentaje, impuesto)</code> que devuelva una función que aplique primero el porcentaje de aumento y luego descuente el impuesto.<br>
+            Úsala con <code>map</code> sobre la lista de empleados.
+        </div>
+    </div>
+    <details>
+        <summary>▸ Ver solución</summary>
+        <div class="solucion-body">
+            <div class="code-block">
+                <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+                <pre><code>def crear_transformador_salario(porcentaje, impuesto):
+    """Fábrica de funciones: cierre sobre porcentaje e impuesto."""
+    def transformar(empleado):
+        salario_bruto   = empleado["salario"] * (1 + porcentaje / 100)
+        salario_neto    = salario_bruto * (1 - impuesto / 100)
+        return {**empleado, "salario": round(salario_neto, 2)}
+    return transformar
+
+empleados = [
+    {"nombre": "Ana",   "salario": 42000},
+    {"nombre": "Luis",  "salario": 35000},
+    {"nombre": "María", "salario": 51000},
+]
+
+# Aumento del 10%, IRPF del 21%
+transformador = crear_transformador_salario(porcentaje=10, impuesto=21)
+
+resultado = list(map(transformador, empleados))
+for e in resultado:
+    print(f"{e['nombre']:10} → {e['salario']:>10,.2f} €")
+
+# Ana        →  36,498.00 €
+# Luis       →  30,415.00 €
+# María      →  44,373.90 €</code></pre>
+            </div>
+        </div>
+    </details>
+</div>
+
+<!-- E3 -->
+<div class="ejercicio-card">
+    <div class="ejercicio-enunciado">
+        <span class="ejercicio-num">E3</span>
+        <div class="ejercicio-texto">
+            Implementa <code>group_by(iterable, clave)</code> que agrupe una lista de dicts por el valor de una clave,
+            usando solo <strong>funciones puras</strong> y <code>reduce</code>. <em>Sin usar <code>itertools.groupby</code></em>.
+        </div>
+    </div>
+    <details>
+        <summary>▸ Ver solución</summary>
+        <div class="solucion-body">
+            <div class="code-block">
+                <div class="code-header"><span class="code-lang">python</span><button class="copy-btn" onclick="copyCode(this)">Copiar</button></div>
+                <pre><code>from functools import reduce
+
+def group_by(iterable, clave):
+    """Agrupa una lista de dicts por el valor de 'clave' usando reduce.
+    Funciones puras: no muta nada fuera de la función.
+    """
+    def acumular(grupos, elemento):
+        k = elemento[clave]
+        # dict unpacking para NO mutar el acumulador anterior
+        grupo_actual = grupos.get(k, [])
+        return {**grupos, k: grupo_actual + [elemento]}
+
+    return reduce(acumular, iterable, {})
+
+empleados = [
+    {"nombre": "Ana",   "dept": "Ingeniería", "salario": 42000},
+    {"nombre": "Luis",  "dept": "Marketing",  "salario": 35000},
+    {"nombre": "María", "dept": "Ingeniería", "salario": 51000},
+    {"nombre": "Pedro", "dept": "Marketing",  "salario": 39000},
+    {"nombre": "Laura", "dept": "Ingeniería", "salario": 48000},
+]
+
+resultado = group_by(empleados, "dept")
+
+for dept, emps in resultado.items():
+    nombres = [e["nombre"] for e in emps]
+    print(f"{dept}: {nombres}")
+
+# Ingeniería: ['Ana', 'María', 'Laura']
+# Marketing:  ['Luis', 'Pedro']</code></pre>
+            </div>
+        </div>
+    </details>
+</div>
+
+<div style="margin-top: 4rem; display: flex; justify-content: space-between;">
+    <a href="m1-fundamentos.html" class="btn btn-outline">← M1: Fundamentos</a>
+    <a href="m3-rdd-dataframes.html" class="btn btn-primary">M3: RDDs & DataFrames →</a>
+</div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;color:var(--text3);font-size:0.8rem;border-top:1px solid var(--border);">
+    &copy; 2026 LucentIA Research · Apache Spark con PySpark
+</footer>
+<script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+    document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = '✓ Copiado'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+</script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>

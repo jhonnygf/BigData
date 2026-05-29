@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apache Spark con PySpark | LucentIA Research</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles.css"/>
+  <link rel="stylesheet" href="styles.css"/>
+
+  <!-- Anti-flash -->
+  <script>!function(){var t=localStorage.getItem('lucentia-theme')||'dark';'light'===t&&document.documentElement.setAttribute('data-theme','light')}()</script>
+
+</head>
+<body>
+<!-- Botón hamburguesa — visible siempre -->
+<button id="sidebarToggle" onclick="toggleSidebar()" aria-label="Abrir menú" aria-expanded="false">&#9776;</button>
+<div id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+    <header class="page-hero">
+        <span class="page-hero-icon">⚡</span>
+        <h1>Apache Spark con <span class="gradient-text">PySpark</span></h1>
+        <p>De cero a producción: arquitectura distribuida, programación funcional, SQL, Machine Learning y Streaming en tiempo real. Con un lab final de detección de fugas de agua.</p>
+    </header>
+
+    <main class="content">
+        <h2>📚 Mapa del Curso</h2>
+        <p>Progresión guiada desde los fundamentos del procesamiento distribuido hasta un sistema de detección de anomalías en tiempo real con ML. Cada módulo construye sobre el anterior.</p>
+
+        <div class="concept-grid">
+            <a href="m1-fundamentos.html" class="concept-card green" style="text-decoration:none;">
+                <div class="concept-icon">🏗️</div>
+                <h3>M1 — Fundamentos & Docker</h3>
+                <p>¿Qué es Spark y por qué existe? Arquitectura Driver/Executor, DAG, particiones, modos de despliegue. Entorno completo con Docker Compose en minutos.</p>
+            </a>
+            <a href="m2-funcional.html" class="concept-card orange" style="text-decoration:none;">
+                <div class="concept-icon">λ</div>
+                <h3>M2 — Programación Funcional</h3>
+                <p>El paradigma que subyace a Spark: funciones puras, inmutabilidad, <code>map</code>, <code>filter</code>, <code>reduce</code>, lambdas, closures y composición. En Python puro antes de tocar Spark.</p>
+            </a>
+            <a href="m3-rdd-dataframes.html" class="concept-card cyan" style="text-decoration:none;">
+                <div class="concept-icon">🧱</div>
+                <h3>M3 — RDDs & DataFrames</h3>
+                <p>Los bloques fundamentales. RDD: colección distribuida e inmutable. DataFrame: RDD con esquema. Transformaciones lazy vs acciones eager. Linaje y tolerancia a fallos.</p>
+            </a>
+            <a href="m4-spark-sql.html" class="concept-card amber" style="text-decoration:none;">
+                <div class="concept-icon">🗄️</div>
+                <h3>M4 — Spark SQL</h3>
+                <p>Catalyst Optimizer, Tungsten engine, esquemas StructType, joins distribuidos (broadcast vs shuffle), window functions, lectura/escritura de Parquet, CSV y JSON.</p>
+            </a>
+            <a href="m5-mllib.html" class="concept-card purple" style="text-decoration:none;">
+                <div class="concept-icon">🤖</div>
+                <h3>M5 — MLlib: Machine Learning</h3>
+                <p>Pipelines ML, transformers y estimators, VectorAssembler, clasificación (RandomForest, GBT), regresión, clustering (KMeans), evaluación y persistencia de modelos.</p>
+            </a>
+            <a href="m6-streaming.html" class="concept-card rose" style="text-decoration:none;">
+                <div class="concept-icon">🌊</div>
+                <h3>M6 — Structured Streaming</h3>
+                <p>Micro-batches vs continuous, sources (Kafka, socket, ficheros), sinks (consola, Parquet, Kafka), triggers, watermarks para datos tardíos y stateful operations.</p>
+            </a>
+            <a href="lab-fugas.html" class="concept-card green" style="text-decoration:none;">
+                <div class="concept-icon">💧</div>
+                <h3>Lab — Detección de Fugas de Agua</h3>
+                <p>Pipeline completo: sensores IoT → Kafka → Spark Streaming → modelo IsolationForest → alertas en tiempo real. Dataset sintético de 10 minutos, 1 lectura/segundo.</p>
+            </a>
+        </div>
+
+        <div class="info-box tip" style="margin-top: 2rem;">
+            <div class="info-box-icon">💡</div>
+            <div class="info-box-text">
+                <strong>Prerrequisitos:</strong> Python básico (listas, funciones, clases) y conceptos de Docker (imágenes, contenedores, puertos). No se necesita experiencia previa con Spark ni sistemas distribuidos.
+            </div>
+        </div>
+
+        <h2 style="margin-top: 3rem;">🏛️ Arquitectura del ecosistema</h2>
+        <div class="table-wrapper">
+            <table>
+                <thead><tr><th>Capa</th><th>Tecnología</th><th>Rol en el curso</th></tr></thead>
+                <tbody>
+                    <tr><td>Ingestión en tiempo real</td><td>Apache Kafka</td><td>Mensajería de sensores IoT</td></tr>
+                    <tr><td>Procesamiento batch</td><td>Spark Core / DataFrame API</td><td>ETL, agregaciones, joins</td></tr>
+                    <tr><td>Procesamiento streaming</td><td>Spark Structured Streaming</td><td>Ventanas temporales, alertas</td></tr>
+                    <tr><td>Machine Learning</td><td>Spark MLlib</td><td>Pipelines, IsolationForest, KMeans</td></tr>
+                    <tr><td>SQL interactivo</td><td>Spark SQL + Catalyst</td><td>Consultas ad-hoc, exploración</td></tr>
+                    <tr><td>Infraestructura</td><td>Docker Compose</td><td>Entorno reproducible local</td></tr>
+                    <tr><td>API Python</td><td>PySpark</td><td>Interfaz principal del curso</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div style="margin-top: 2rem; text-align: center;">
+            <a href="m1-fundamentos.html" class="btn btn-primary" style="font-size: 1rem; padding: 1rem 2.5rem;">Comenzar el Curso →</a>
+        </div>
+    </main>
+
+    <footer style="text-align: center; padding: 2rem; color: var(--text3); font-size: 0.8rem; border-top: 1px solid var(--border);">
+        &copy; 2026 LucentIA Research · Apache Spark con PySpark
+    </footer>
+    <script>
+        const navbar = document.getElementById('navbar');
+        window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
+        document.getElementById('navToggle')?.addEventListener('click', () => document.querySelector('.nav-links').classList.toggle('open'));
+    </script>
+
+<!-- ── Sidebar inyectada por inject_gen1_sidebar.py ────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">LucentIA</div>
+  <div class="sidebar-course">Apache Spark con PySpark</div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-section">Índice del curso</li>
+    <li><a href="index.html">Apache Spark con PySpark</a></li>
+    <li><a href="lab-fugas.html">Lab: Detección de Fugas</a></li>
+    <li><a href="m1-fundamentos.html">M1: Fundamentos & Docker</a></li>
+    <li><a href="m2-funcional.html">M2: Programación Funcional</a></li>
+    <li><a href="m3-rdd-dataframes.html">M3: RDDs & DataFrames</a></li>
+    <li><a href="m4-spark-sql.html">M4: Spark SQL & Optimización</a></li>
+    <li><a href="m5-mllib.html">M5: MLlib</a></li>
+    <li><a href="m6-streaming.html">M6: Structured Streaming</a></li>
+  </ul>
+  <div class="theme-toggle">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">
+      <span id="themeIcon">&#9728;</span>
+      <span id="themeLabel">Modo claro</span>
+    </button>
+  </div>
+</nav>
+
+<script src="../../shared/lucentia.js" defer></script>
+</body>
+</html>
